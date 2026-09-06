@@ -72,7 +72,7 @@ struct SectionHeader: View {
     }
 }
 
-struct Section<Content: View>: View {
+struct PanelSection<Content: View>: View {
     var title: String?
     var aside: String?
     var asideColor: Color = .secondary
@@ -148,7 +148,9 @@ struct CapacityBar: View {
     let directories: [DirectoryUsage]
     let loading: Bool
 
-    @State private var expanded = false
+    // Shared with Settings: toggling here is remembered, and the settings window
+    // and the panel stay in sync because both read the same UserDefaults key.
+    @AppStorage(PanelSetting.breakdownOpen) private var expanded = false
 
     private var accounted: Int64 { directories.reduce(0) { $0 + $1.bytes } }
     private var other: Int64 { max(0, volume.usedBytes - accounted) }

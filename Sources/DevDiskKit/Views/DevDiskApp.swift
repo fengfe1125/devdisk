@@ -4,7 +4,9 @@ public struct DevDiskApp: App {
     @StateObject private var store = DiskStore()
     @StateObject private var updates = UpdateChecker()
 
-    public init() {}
+    public init() {
+        PanelSetting.registerDefaults()
+    }
 
     public var body: some Scene {
         // A Dock icon with nothing behind it would be dead weight — clicking it has to
@@ -18,6 +20,12 @@ public struct DevDiskApp: App {
         }
         .defaultSize(width: 400, height: 700)
         .windowResizability(.contentMinSize)
+
+        Settings {
+            SettingsView()
+                .environmentObject(store)
+                .environmentObject(updates)
+        }
 
         MenuBarExtra {
             PanelView()

@@ -13,6 +13,7 @@ struct PanelView: View {
     var presentation: Presentation = .popover
 
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(PanelSetting.version) private var showVersion = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -41,10 +42,12 @@ struct PanelView: View {
 
             Divider1()
             actionFooter
-            Divider1()
-            VersionFooter(version: updates.currentVersion,
-                          update: updates.available) { url in
-                NSWorkspace.shared.open(url)
+            if showVersion || updates.available != nil {
+                Divider1()
+                VersionFooter(version: updates.currentVersion,
+                              update: updates.available) { url in
+                    NSWorkspace.shared.open(url)
+                }
             }
         }
         .frame(width: presentation == .window ? nil : UI.width)
@@ -97,6 +100,16 @@ struct PanelView: View {
             if store.screen == .connected || store.screen == .scan {
                 IconButton(symbol: "arrow.clockwise", help: "刷新") { store.refresh() }
             }
+            SettingsLink {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("设置")
+
             if presentation == .popover {
                 IconButton(symbol: "macwindow", help: "在窗口中打开") {
                     NSApp.activate(ignoringOtherApps: true)

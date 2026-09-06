@@ -2,26 +2,37 @@ import SwiftUI
 
 /// Scrollable body only. The eject button lives in `ConnectedFooter`, pinned by
 /// PanelView, so the primary action never scrolls out of reach.
+///
+/// Which sections appear is the user's choice, made in Settings — guessing at the
+/// right density produced either a panel taller than the screen or one too sparse
+/// to be worth opening.
 struct ConnectedView: View {
     @EnvironmentObject var store: DiskStore
+
+    @AppStorage(PanelSetting.capacity)       private var showCapacity = true
+    @AppStorage(PanelSetting.hardware)       private var showHardware = true
+    @AppStorage(PanelSetting.hardwareDetail) private var hardwareDetailRaw = HardwareDetail.standard.rawValue
+    @AppStorage(PanelSetting.checks)         private var showChecks = true
+    @AppStorage(PanelSetting.checksAllRows)  private var checksAllRows = false
+    @AppStorage(PanelSetting.occupancy)      private var showOccupancy = true
+    @AppStorage(PanelSetting.volume)         private var showVolume = false
+
+    private var detail: HardwareDetail {
+        HardwareDetail(rawValue: hardwareDetailRaw) ?? .standard
+    }
 
     var body: some View {
         if let snap = store.snapshot {
             VStack(alignment: .leading, spacing: 0) {
-                Section {
-                    CapacityBar(volume: snap.volume,
-                                directories: store.directories,
-                                loading: store.directoriesLoading)
+                let sections = visibleSections(snap)
+                if sections.isEmpty {
+                    allHidden
+                } else {
+                    ForEach(Array(sections.enumerated()), id: \.offset) { i, piece in
+                        if i > 0 { Divider1() }
+                        piece.view
+                    }
                 }
-                Divider1()
-
-                hardware(snap)
-                Divider1()
-
-                checks(snap)
-                Divider1()
-
-                occupancy(snap)
             }
         } else {
             HStack(spacing: 8) {
@@ -34,10 +45,43 @@ struct ConnectedView: View {
         }
     }
 
+    private struct Piece { let view: AnyView }
+
+    private func visibleSections(_ snap: DiskSnapshot) -> [Piece] {
+        var out: [Piece] = []
+        if showCapacity  { out.append(Piece(view: AnyView(capacity(snap)))) }
+        if showHardware  { out.append(Piece(view: AnyView(hardware(snap)))) }
+        if showVolume    { out.append(Piece(view: AnyView(volumeInfo(snap)))) }
+        if showChecks    { out.append(Piece(view: AnyView(checks(snap)))) }
+        if showOccupancy { out.append(Piece(view: AnyView(occupancy(snap)))) }
+        return out
+    }
+
+    private var allHidden: some View {
+        VStack(spacing: 6) {
+            Text("所有区块都已隐藏")
+                .font(.system(size: 12, weight: .medium))
+            Text("在设置里选择要显示的内容（⌘,）")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 26)
+    }
+
+    // MARK: - Capacity
+
+    private func capacity(_ snap: DiskSnapshot) -> some View {
+        PanelSection {
+            CapacityBar(volume: snap.volume,
+                        directories: store.directories,
+                        loading: store.directoriesLoading)
+        }
+    }
+
     // MARK: - Hardware & health
 
     @ViewBuilder private func hardware(_ snap: DiskSnapshot) -> some View {
-        Section(title: "硬件与健康",
+        PanelSection(title: "硬件与健康",
                 aside: snap.hardware.firmware.map { "固件 \($0)" }) {
             VStack(spacing: 6) {
                 if let link = snap.hardware.linkDescription {
@@ -54,41 +98,90 @@ struct ConnectedView: View {
                     }
                 }
 
-                if let h = snap.health {
-                    if let w = h.bytesWritten { KeyValueRow("累计写入", Fmt.bytes(w)) }
-                    if let life = h.lifeRemaining {
-                        KeyValueRow("剩余寿命") {
-                            HStack(spacing: 7) {
-                                GeometryReader { geo in
-                                    ZStack(alignment: .leading) {
-                                        Capsule().fill(.quaternary)
-                                        Capsule()
-                                            .fill(life > 20 ? Color.green : Color.orange)
-                                            .frame(width: geo.size.width * CGFloat(life) / 100)
-                                    }
-                                }
-                                .frame(width: 54, height: 5)
-                                Text("\(life)%").font(.system(size: 11.5)).monospacedDigit()
-                            }
+                if detail != .basic {
+                    if let h = snap.health {
+                        standardHealth(h)
+                        if detail == .full { fullHealth(h) }
+                    } else if let why = snap.healthUnavailableReason {
+                        // Never show blanks — say why the detail is missing.
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "info.circle").font(.system(size: 10))
+                            Text(why).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func standardHealth(_ h: SmartHealth) -> some View {
+        if let w = h.bytesWritten { KeyValueRow("累计写入", Fmt.bytes(w)) }
+        if let life = h.lifeRemaining {
+            KeyValueRow("剩余寿命") {
+                HStack(spacing: 7) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.quaternary)
+                            Capsule()
+                                .fill(life > 20 ? Color.green : Color.orange)
+                                .frame(width: geo.size.width * CGFloat(life) / 100)
                         }
                     }
-                    if let hrs = h.powerOnHours { KeyValueRow("通电时间", Fmt.hours(hrs)) }
-                    if let temp = h.temperatureC {
-                        KeyValueRow("温度") {
-                            Text("\(temp) °C")
-                                .font(.system(size: 11.5)).monospacedDigit()
-                                .foregroundStyle(temp >= 70 ? Color.orange : Color.primary)
-                        }
-                    }
-                } else if let why = snap.healthUnavailableReason {
-                    // Never show blanks — say why the detail is missing.
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "info.circle").font(.system(size: 10))
-                        Text(why).fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 2)
+                    .frame(width: 54, height: 5)
+                    Text("\(life)%").font(.system(size: 11.5)).monospacedDigit()
+                }
+            }
+        }
+        if let hrs = h.powerOnHours { KeyValueRow("通电时间", Fmt.hours(hrs)) }
+        if let temp = h.temperatureC {
+            KeyValueRow("温度") {
+                Text("\(temp) °C")
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(temp >= 70 ? Color.orange : Color.primary)
+            }
+        }
+    }
+
+    @ViewBuilder private func fullHealth(_ h: SmartHealth) -> some View {
+        if let r = h.bytesRead { KeyValueRow("累计读取", Fmt.bytes(r)) }
+        if let spare = h.availableSpare { KeyValueRow("可用备用块", "\(spare)%") }
+        if let c = h.powerCycles { KeyValueRow("通电次数", "\(c) 次") }
+        if let u = h.unsafeShutdowns {
+            KeyValueRow("非正常断电") {
+                Text("\(u) 次")
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(h.allShutdownsUnsafe ? Color.orange : Color.primary)
+            }
+        }
+        if let e = h.mediaErrors {
+            KeyValueRow("介质错误") {
+                Text("\(e)")
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(e > 0 ? Color.red : Color.primary)
+            }
+        }
+    }
+
+    // MARK: - Volume
+
+    private func volumeInfo(_ snap: DiskSnapshot) -> some View {
+        let v = snap.volume
+        return PanelSection(title: "卷信息", aside: v.deviceIdentifier) {
+            VStack(spacing: 6) {
+                KeyValueRow("挂载点", v.mountPoint)
+                KeyValueRow("文件系统", v.filesystem)
+                KeyValueRow("类型", v.isExternal ? "外置" : "内置")
+                if let p = v.physicalDisk { KeyValueRow("物理盘", "/dev/" + p) }
+                if let s = snap.hardware.serial { KeyValueRow("序列号", s) }
+                KeyValueRow("卷 UUID") {
+                    Text(v.volumeUUID)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1).truncationMode(.middle)
                 }
             }
         }
@@ -98,12 +191,9 @@ struct ConnectedView: View {
 
     @ViewBuilder private func checks(_ snap: DiskSnapshot) -> some View {
         let warnings = snap.warningCount
-        Section(title: "配置检查",
+        PanelSection(title: "配置检查",
                 aside: warnings > 0 ? "\(warnings) 项需注意" : "全部正常",
                 asideColor: warnings > 0 ? .orange : .green) {
-            // Only the items needing attention get a full two-line row. Everything
-            // that passes collapses into one line — seven expanded rows made the
-            // panel taller than the screen.
             let problems = snap.checks.filter { $0.severity != .ok }
             let passing = snap.checks.filter { $0.severity == .ok }
 
@@ -114,7 +204,15 @@ struct ConnectedView: View {
                              onOpen: store.openSettings)
                 }
 
-                if !passing.isEmpty {
+                if checksAllRows {
+                    ForEach(passing) { check in
+                        CheckRow(check: check,
+                                 onCopy: store.copy,
+                                 onOpen: store.openSettings)
+                    }
+                } else if !passing.isEmpty {
+                    // Collapsed to one line by default; seven expanded rows were a
+                    // big part of what made the panel taller than the screen.
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "checkmark.circle")
                             .font(.system(size: 12))
@@ -139,7 +237,7 @@ struct ConnectedView: View {
         let mine = report?.mine ?? []
         let system = report?.holders(.system) ?? []
 
-        Section(title: "谁在使用",
+        PanelSection(title: "谁在使用",
                 aside: "\(mine.count) 个你的进程 · \(system.count) 个系统进程") {
             VStack(spacing: 1) {
                 ForEach(mine) { h in
@@ -191,7 +289,6 @@ struct ConnectedView: View {
             LinkButton(title: "查看详情并重新检测…") { store.screen = .scan }
         }
     }
-
 }
 
 /// Pinned action area for the connected screen.

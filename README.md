@@ -55,16 +55,26 @@ cd devdisk && ./package.sh /Applications
 | ✓ 对勾 | 已弹出，可安全拔线 |
 | ╱ 斜杠 | 未连接 |
 
-默认监视 `/Volumes/Developer`，改成别的卷：
+## 设置（⌘,）
+
+面板显示哪些内容由你决定——密度这件事没有普适答案，猜出来的结果要么高过屏幕，要么空得不值得点开。
+
+**显示**：容量、硬件与健康、配置检查、谁在使用、卷信息、底部版本行各自可开关；「已用空间构成」是否展开；配置检查里已通过的项是压成一行还是全部展开。
+
+硬件与健康有三档详细程度：
+
+| 档位 | 内容 |
+|---|---|
+| 基础 | 接口、SMART、TRIM |
+| 标准（默认） | 再加累计写入、剩余寿命、通电时间、温度 |
+| 全部 | 再加累计读取、可用备用块、通电次数、非正常断电、介质错误 |
+
+**通用**：监视哪个卷、是否检查更新、立即检查。
+
+也可以直接写 defaults：
 
 ```bash
 defaults write com.sakura.devdisk targetMountPoint -string "/Volumes/你的卷名"
-```
-
-关闭更新检查：
-
-```bash
-defaults write com.sakura.devdisk updateCheckEnabled -bool false
 ```
 
 ## 它做什么

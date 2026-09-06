@@ -13,7 +13,7 @@ struct EjectingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Section(title: "正在安全弹出",
+            PanelSection(title: "正在安全弹出",
                     aside: "\(doneCount) / \(store.ejectSteps.count)") {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(store.ejectSteps) { StepRow(step: $0) }
