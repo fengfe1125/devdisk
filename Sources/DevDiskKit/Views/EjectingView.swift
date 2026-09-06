@@ -19,24 +19,30 @@ struct EjectingView: View {
                     ForEach(store.ejectSteps) { StepRow(step: $0) }
                 }
             }
-            Divider1()
-
-            VStack(spacing: 7) {
-                Button("中止") {
-                    store.screen = .connected
-                    store.refresh()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-
-                Text("中止不会撤销已停止的进程")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, UI.hPad)
-            .padding(.vertical, 11)
         }
+    }
+}
+
+/// Pinned action area while an eject is running.
+struct EjectingFooter: View {
+    @EnvironmentObject var store: DiskStore
+
+    var body: some View {
+        VStack(spacing: 7) {
+            Button("中止") {
+                store.screen = .connected
+                store.refresh()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+
+            Text("中止不会撤销已停止的进程")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, UI.hPad)
+        .padding(.vertical, 11)
     }
 }
 

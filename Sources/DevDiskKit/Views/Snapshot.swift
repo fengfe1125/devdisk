@@ -192,7 +192,7 @@ public enum Snapshot {
         for (name, screen, checker) in jobs {
             store.screen = screen
             for (suffix, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
-                let view = PanelView()
+                let view = PanelView(presentation: .snapshot)
                     .environmentObject(store)
                     .environmentObject(checker)
                     .environment(\.colorScheme, scheme)

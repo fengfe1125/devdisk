@@ -43,15 +43,17 @@ cd devdisk && ./package.sh /Applications
 
 ## 用法
 
-启动后没有 Dock 图标，只在菜单栏出现一个硬盘图标，图形随状态变化：
+菜单栏出现一个硬盘图标，程序坞里也有。菜单栏点开是紧凑卡片，需要看全时点卡片右上角的窗口按钮切到可缩放的独立窗口。
 
-| 图标 | 状态 |
+图标为实心机身 + 图形挖空的模板图，随状态变化：
+
+| 挖空图形 | 状态 |
 |:---:|---|
-| ▲ | 已连接，配置检查全过 |
-| ! | 已连接，有配置项需注意 |
-| — | 正在弹出 |
-| ✓ | 已弹出，可安全拔线 |
-| ╱ | 未连接 |
+| ▲ 弹出三角 | 已连接，配置检查全过 |
+| ! 感叹号 | 已连接，有配置项需注意 |
+| — 减号 | 正在弹出 |
+| ✓ 对勾 | 已弹出，可安全拔线 |
+| ╱ 斜杠 | 未连接 |
 
 默认监视 `/Volumes/Developer`，改成别的卷：
 
@@ -127,13 +129,15 @@ swift build
 .build/debug/DevDisk --check-update [版本号]         # 对真实 GitHub API 跑一次更新检查
 ```
 
-`--snapshot` 用 `ImageRenderer` 直接渲染真实 SwiftUI 视图（数据走真实探针），因为菜单栏 agent 没有可截图的普通窗口。注意 `.borderless` / `.link` / `Menu` 这几种按钮样式会桥接到 AppKit 控件、`ImageRenderer` 画不出来——界面里因此统一用 `.plain` 加显式样式。
+`--snapshot` 用 `ImageRenderer` 直接渲染真实 SwiftUI 视图（数据走真实探针）。两处限制：`.borderless` / `.link` / `Menu` 这几种按钮样式桥接到 AppKit 控件，画不出来——界面里因此统一用 `.plain` 加显式样式；**`ScrollView` 的内容也渲染不出（一片空白）**，所以快照模式用 `.snapshot` 呈现方式渲染不带滚动壳的版本，滚动壳本身只能靠跑真实应用验证。
 
 ### 图标
 
 在 Figma 绘制，源文件见 `design/`，导出物在 `Sources/DevDiskKit/Resources/MenuBarIcons/`（矢量 PDF）和 `Resources/AppIcon.icns`。
 
 菜单栏图标是**模板图**：纯黑 + alpha，由 macOS 按深浅色和高亮状态自行着色。`NSImage.isTemplate = true` 是必需的——漏了它图标在深色菜单栏上会变成一团不可读的黑块。
+
+采用实心机身 + 布尔挖空而非纯描边：16pt 下细描边轮廓在菜单栏里太轻，看不清。绘制时两个 Figma 的坑——`outlineStroke()` 在这个上下文里不产出可用的裁剪体（无填充图形没有面积可减），且 `vectorPaths` 只接受绝对的 M/L/C/Z，相对指令 `m` 与圆弧 `a` 会直接报错，所以所有挖空图形都写成显式填充多边形。
 
 ## 许可
 

@@ -1,9 +1,18 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Design tokens
 
 enum UI {
     static let width: CGFloat = 380
+
+    /// Upper bound on the scrolling middle, derived from the display so the popover
+    /// stays a card on a 13" laptop as well as a 32" monitor. The 180pt reserve
+    /// covers the header, the action area and the version line.
+    @MainActor static var maxScrollHeight: CGFloat {
+        let available = NSScreen.main?.visibleFrame.height ?? 800
+        return min(520, max(320, available - 180))
+    }
     static let hPad: CGFloat = 14
     static let vPad: CGFloat = 12
 
@@ -139,6 +148,8 @@ struct CapacityBar: View {
     let directories: [DirectoryUsage]
     let loading: Bool
 
+    @State private var expanded = false
+
     private var accounted: Int64 { directories.reduce(0) { $0 + $1.bytes } }
     private var other: Int64 { max(0, volume.usedBytes - accounted) }
 
@@ -180,7 +191,27 @@ struct CapacityBar: View {
                 }
                 .padding(.top, 12)
             } else if !directories.isEmpty {
-                breakdown
+                // Collapsed by default: the headline is how much room is left, and an
+                // always-open six-row legend was a big part of what made the panel
+                // taller than the screen.
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                        Text("已用空间构成")
+                        Spacer()
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 12)
+
+                if expanded { breakdown }
             }
         }
     }
@@ -201,9 +232,6 @@ struct CapacityBar: View {
         let total = max(1, segments.reduce(0) { $0 + $1.bytes })
 
         VStack(alignment: .leading, spacing: 10) {
-            Text("已用空间构成")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-
             GeometryReader { geo in
                 HStack(spacing: 1) {
                     ForEach(segments, id: \.name) { seg in
@@ -232,7 +260,7 @@ struct CapacityBar: View {
                 }
             }
         }
-        .padding(.top, 14)
+        .padding(.top, 10)
     }
 }
 

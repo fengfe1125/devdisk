@@ -26,13 +26,6 @@ struct ScanView: View {
                   note: "不由本程序处理。diskutil eject 会让它们自行释放。")
 
             permissionNote
-            Divider1()
-
-            VStack(spacing: 0) {
-                PrimaryButton(title: "仍然安全弹出", symbol: "eject.fill") { store.eject() }
-            }
-            .padding(.horizontal, UI.hPad)
-            .padding(.vertical, 11)
         }
     }
 
@@ -169,6 +162,17 @@ struct ScanView: View {
         }
         .padding(.horizontal, UI.hPad)
         .padding(.vertical, 12)
+    }
+}
+
+/// Pinned action area for the detection screen.
+struct ScanFooter: View {
+    @EnvironmentObject var store: DiskStore
+
+    var body: some View {
+        PrimaryButton(title: "仍然安全弹出", symbol: "eject.fill") { store.eject() }
+            .padding(.horizontal, UI.hPad)
+            .padding(.vertical, 11)
     }
 }
 

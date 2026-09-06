@@ -1,5 +1,7 @@
 import SwiftUI
 
+/// Scrollable body only. The eject button lives in `ConnectedFooter`, pinned by
+/// PanelView, so the primary action never scrolls out of reach.
 struct ConnectedView: View {
     @EnvironmentObject var store: DiskStore
 
@@ -20,9 +22,6 @@ struct ConnectedView: View {
                 Divider1()
 
                 occupancy(snap)
-                Divider1()
-
-                footer
             }
         } else {
             HStack(spacing: 8) {
@@ -102,11 +101,32 @@ struct ConnectedView: View {
         Section(title: "配置检查",
                 aside: warnings > 0 ? "\(warnings) 项需注意" : "全部正常",
                 asideColor: warnings > 0 ? .orange : .green) {
+            // Only the items needing attention get a full two-line row. Everything
+            // that passes collapses into one line — seven expanded rows made the
+            // panel taller than the screen.
+            let problems = snap.checks.filter { $0.severity != .ok }
+            let passing = snap.checks.filter { $0.severity == .ok }
+
             VStack(spacing: 0) {
-                ForEach(snap.checks) { check in
+                ForEach(problems) { check in
                     CheckRow(check: check,
                              onCopy: store.copy,
                              onOpen: store.openSettings)
+                }
+
+                if !passing.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.green)
+                            .frame(width: 14)
+                        Text(passing.map(\.title).joined(separator: "、"))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 5)
                 }
             }
         }
@@ -172,9 +192,13 @@ struct ConnectedView: View {
         }
     }
 
-    // MARK: - Footer
+}
 
-    private var footer: some View {
+/// Pinned action area for the connected screen.
+struct ConnectedFooter: View {
+    @EnvironmentObject var store: DiskStore
+
+    var body: some View {
         VStack(spacing: 7) {
             PrimaryButton(title: "安全弹出", symbol: "eject.fill") { store.eject() }
             Text(hint)
@@ -184,7 +208,7 @@ struct ConnectedView: View {
         }
         .padding(.horizontal, UI.hPad)
         .padding(.top, 11)
-        .padding(.bottom, 13)
+        .padding(.bottom, 11)
     }
 
     private var hint: String {

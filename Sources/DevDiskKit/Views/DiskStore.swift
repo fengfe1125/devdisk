@@ -221,4 +221,6 @@ final class DiskStore: ObservableObject {
     }
 
     func quit() { NSApplication.shared.terminate(nil) }
+
+    static let mainWindowID = "devdisk.main"
 }

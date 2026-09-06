@@ -5,31 +5,72 @@ struct PanelView: View {
     @EnvironmentObject var store: DiskStore
     @EnvironmentObject var updates: UpdateChecker
 
+    /// Where this panel is being shown. The popover is a fixed-width card with a
+    /// bounded body; the window is resizable and lets the body fill it; snapshot
+    /// renders unwrapped because ImageRenderer cannot rasterize ScrollView contents
+    /// (they come out blank).
+    enum Presentation { case popover, window, snapshot }
+    var presentation: Presentation = .popover
+
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider1()
 
-            switch store.screen {
-            case .connected:
-                ConnectedView()
-            case .scan:
-                ScanView()
-            case .ejecting:
-                EjectingView()
-            case .ejected(_, let apps, let daemons):
-                EjectedView(apps: apps, daemons: daemons)
-            case .disconnected:
-                DisconnectedView()
+            // A menu bar popover is a card, not a page. Without a bound the connected
+            // screen renders ~900pt tall and runs from the menu bar to the bottom of
+            // the display. Only the middle scrolls; the header and the primary action
+            // stay put so eject is always one click away.
+            switch presentation {
+            case .popover:
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) { screen }
+                }
+                .frame(maxHeight: UI.maxScrollHeight)
+                .scrollBounceBehavior(.basedOnSize)
+            case .window:
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) { screen }
+                }
+                .frame(maxHeight: .infinity)
+            case .snapshot:
+                VStack(alignment: .leading, spacing: 0) { screen }
             }
 
+            Divider1()
+            actionFooter
             Divider1()
             VersionFooter(version: updates.currentVersion,
                           update: updates.available) { url in
                 NSWorkspace.shared.open(url)
             }
         }
-        .frame(width: UI.width)
+        .frame(width: presentation == .window ? nil : UI.width)
+        .frame(minWidth: presentation == .window ? UI.width : nil,
+               maxWidth: presentation == .window ? .infinity : nil,
+               maxHeight: presentation == .window ? .infinity : nil)
+    }
+
+    @ViewBuilder private var screen: some View {
+        switch store.screen {
+        case .connected:            ConnectedView()
+        case .scan:                 ScanView()
+        case .ejecting:             EjectingView()
+        case .ejected(_, let a, let d): EjectedView(apps: a, daemons: d)
+        case .disconnected:         DisconnectedView()
+        }
+    }
+
+    @ViewBuilder private var actionFooter: some View {
+        switch store.screen {
+        case .connected:    ConnectedFooter()
+        case .scan:         ScanFooter()
+        case .ejecting:     EjectingFooter()
+        case .ejected:      EjectedFooter()
+        case .disconnected: DisconnectedFooter()
+        }
     }
 
     // MARK: - Header
@@ -55,6 +96,12 @@ struct PanelView: View {
             // Appearance is identical.
             if store.screen == .connected || store.screen == .scan {
                 IconButton(symbol: "arrow.clockwise", help: "刷新") { store.refresh() }
+            }
+            if presentation == .popover {
+                IconButton(symbol: "macwindow", help: "在窗口中打开") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: DiskStore.mainWindowID)
+                }
             }
             IconButton(symbol: "power", help: "退出 DevDisk") { store.quit() }
         }
@@ -170,20 +217,28 @@ struct DisconnectedView: View {
                     }
                 )
             )
-            Divider1()
-            HStack {
-                Spacer()
-                Text(store.lastEjectSummary.map { "上次弹出：\($0)" } ?? store.mountPoint)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-                Spacer()
-            }
-            .padding(.vertical, 11)
         }
     }
 
     private var name: String {
         URL(fileURLWithPath: store.mountPoint).lastPathComponent
+    }
+}
+
+/// Pinned footer for the disconnected screen — last eject result, or the path
+/// being watched.
+struct DisconnectedFooter: View {
+    @EnvironmentObject var store: DiskStore
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Text(store.lastEjectSummary.map { "上次弹出：\($0)" } ?? store.mountPoint)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.vertical, 10)
     }
 }
 
@@ -206,12 +261,17 @@ struct EjectedView: View {
                     }
                 )
             )
-            Divider1()
-            HStack {
-                PrimaryButton(title: "好") { store.refresh() }
-            }
+        }
+    }
+}
+
+/// Pinned action area after a successful eject.
+struct EjectedFooter: View {
+    @EnvironmentObject var store: DiskStore
+
+    var body: some View {
+        PrimaryButton(title: "好") { store.refresh() }
             .padding(.horizontal, UI.hPad)
             .padding(.vertical, 11)
-        }
     }
 }

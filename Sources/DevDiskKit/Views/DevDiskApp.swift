@@ -7,6 +7,18 @@ public struct DevDiskApp: App {
     public init() {}
 
     public var body: some Scene {
+        // A Dock icon with nothing behind it would be dead weight — clicking it has to
+        // open something. This window carries the same panel, resizable, so the body
+        // is not squeezed into a popover-sized card.
+        Window("DevDisk", id: DiskStore.mainWindowID) {
+            PanelView(presentation: .window)
+                .environmentObject(store)
+                .environmentObject(updates)
+                .onAppear { updates.checkIfDue() }
+        }
+        .defaultSize(width: 400, height: 700)
+        .windowResizability(.contentMinSize)
+
         MenuBarExtra {
             PanelView()
                 .environmentObject(store)
