@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The update checker compares the running app's CFBundleShortVersionString
+      # against the latest release tag. If they drift, everyone who installs this
+      # build is told there is an update available for the version they just
+      # installed — so a mismatch fails the release instead of shipping.
+      - name: Tag must match Info.plist version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PLIST=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+          echo "tag=$TAG  plist=$PLIST"
+          if [ "$TAG" != "$PLIST" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match Info.plist version ${PLIST}"
+            exit 1
+          fi
+
+      - name: Test
+        run: swift test
+
+      - name: Build app
+        run: ./package.sh -
+
+      - name: Zip
+        run: |
+          ditto -c -k --keepParent build/DevDisk.app "DevDisk-${GITHUB_REF_NAME}.zip"
+          shasum -a 256 "DevDisk-${GITHUB_REF_NAME}.zip" | tee checksum.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(cut -d' ' -f1 checksum.txt)
+          cat > notes.md <<NOTES
+          ## 安装
+
+          1. 下载 \`DevDisk-${GITHUB_REF_NAME}.zip\` 并解压
+          2. 把 \`DevDisk.app\` 拖进 \`/Applications\`
+          3. **首次打开必须右键 → 打开**
+
+          第 3 步不能省。这个应用只做了 ad-hoc 签名、未经 Apple 公证，双击会被
+          Gatekeeper 拦下并提示"无法验证开发者"。右键 → 打开之后就正常了。
+
+          可选：\`brew install smartmontools\` 以读取 TBW、剩余寿命、通电时间、温度。
+          没装也能运行，健康区会说明缺失原因。
+
+          SHA-256: \`${SHA}\`
+          NOTES
+          gh release create "$GITHUB_REF_NAME" \
+            "DevDisk-${GITHUB_REF_NAME}.zip" \
+            --title "DevDisk ${GITHUB_REF_NAME}" \
+            --notes-file notes.md

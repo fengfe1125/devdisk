@@ -1,0 +1,1379 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevDisk — 设计稿</title>
+<style>
+/* ============================================================
+   DevDisk 设计稿
+   目标形态：macOS 菜单栏 popover，宽 380pt
+   数据来源：2026-09-06 于本机实测（diskutil / df / du /
+            system_profiler / mdutil / tmutil / pmset）
+   ============================================================ */
+
+:root {
+  --pop-bg:        #f4f4f6;
+  --pop-border:    rgba(0,0,0,.12);
+  --pop-shadow:    0 12px 32px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10);
+  --text:          rgba(0,0,0,.88);
+  --text-2:        rgba(0,0,0,.52);
+  --text-3:        rgba(0,0,0,.34);
+  --sep:           rgba(0,0,0,.09);
+  --fill:          rgba(0,0,0,.05);
+  --fill-hover:    rgba(0,0,0,.09);
+  --track:         rgba(0,0,0,.10);
+  --accent:        #007aff;
+  --green:         #2eb350;
+  --orange:        #f08c00;
+  --red:           #e5342a;
+  --seg-android:   #0a84ff;
+  --seg-apps:      #a94ee0;
+  --seg-xcode:     #f0900a;
+  --seg-projects:  #2eb350;
+  --seg-java:      #e8365c;
+  --seg-other:     rgba(0,0,0,.28);
+
+  --page-bg:       #dfdfe3;
+  --page-text:     rgba(0,0,0,.7);
+  --menubar-bg:    rgba(250,250,252,.86);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --pop-bg:        #2c2c2e;
+  --pop-border:    rgba(255,255,255,.10);
+  --pop-shadow:    0 12px 34px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+  --text:          rgba(255,255,255,.92);
+  --text-2:        rgba(255,255,255,.55);
+  --text-3:        rgba(255,255,255,.36);
+  --sep:           rgba(255,255,255,.10);
+  --fill:          rgba(255,255,255,.07);
+  --fill-hover:    rgba(255,255,255,.13);
+  --track:         rgba(255,255,255,.12);
+  --accent:        #0a84ff;
+  --green:         #30d158;
+  --orange:        #ff9f0a;
+  --red:           #ff453a;
+  --seg-android:   #409cff;
+  --seg-apps:      #bf5af2;
+  --seg-xcode:     #ff9f0a;
+  --seg-projects:  #30d158;
+  --seg-java:      #ff375f;
+  --seg-other:     rgba(255,255,255,.28);
+
+  --page-bg:       #1a1a1c;
+  --page-text:     rgba(255,255,255,.62);
+  --menubar-bg:    rgba(38,38,40,.86);
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--page-bg); }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--page-bg);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+        "Helvetica Neue", "PingFang SC", sans-serif;
+  color: var(--page-text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 20px 60px;
+  -webkit-font-smoothing: antialiased;
+  transition: background .25s ease;
+}
+
+/* ---------- 预览控制条（不属于产品，仅供你切换查看） ---------- */
+
+.preview-bar {
+  width: 100%;
+  max-width: 620px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.seg {
+  display: inline-flex;
+  background: var(--fill);
+  border: 1px solid var(--pop-border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+.seg button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--page-text);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg button[aria-selected="true"] {
+  background: var(--pop-bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,.14);
+  font-weight: 590;
+}
+.spacer { flex: 1 1 auto; }
+
+.preview-note {
+  width: 100%;
+  max-width: 620px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--page-text);
+  opacity: .8;
+  margin: 4px 0 22px;
+  padding-left: 2px;
+}
+.preview-note code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  background: var(--fill);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* ---------- 模拟菜单栏，给 popover 一点位置感 ---------- */
+
+.stage { width: 380px; }
+
+.menubar {
+  height: 24px;
+  background: var(--menubar-bg);
+  border: 1px solid var(--pop-border);
+  border-radius: 6px 6px 0 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 8px;
+  gap: 12px;
+}
+.menubar .mb-item {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: .02em;
+}
+.menubar .mb-active {
+  color: var(--text);
+  background: var(--fill-hover);
+  border-radius: 4px;
+  padding: 2px 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.menubar .mb-active svg { display: block; }
+
+.tail {
+  width: 380px;
+  height: 7px;
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 26px;
+}
+.tail i {
+  width: 12px; height: 7px;
+  background: var(--pop-bg);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  display: block;
+}
+
+/* ---------- popover 面板 ---------- */
+
+.panel {
+  width: 380px;
+  background: var(--pop-bg);
+  border: 1px solid var(--pop-border);
+  border-radius: 11px;
+  box-shadow: var(--pop-shadow);
+  color: var(--text);
+  overflow: hidden;
+  transition: background .25s ease;
+}
+
+/* 头部 */
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px 12px;
+}
+.disk-glyph {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 72%, #000));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.28);
+}
+.disk-glyph svg { display: block; }
+.panel.state-off .disk-glyph,
+.panel.state-ejected .disk-glyph {
+  background: var(--track);
+  box-shadow: none;
+}
+.panel.state-off .disk-glyph svg,
+.panel.state-ejected .disk-glyph svg { opacity: .45; }
+
+.head-text { min-width: 0; flex: 1 1 auto; }
+.vol-name {
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: -.01em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: 0 0 auto;
+}
+.dot.off { background: var(--text-3); }
+.dot.busy { background: var(--orange); }
+.vol-sub {
+  font-size: 11px;
+  color: var(--text-2);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.icon-btn:hover { background: var(--fill-hover); color: var(--text); }
+
+hr.sep {
+  border: 0;
+  border-top: 1px solid var(--sep);
+  margin: 0;
+}
+
+/* 区块 */
+.section { padding: 12px 14px; }
+.sec-head {
+  font-size: 10.5px;
+  font-weight: 640;
+  color: var(--text-3);
+  letter-spacing: .05em;
+  margin-bottom: 9px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.sec-head .aside {
+  font-weight: 500;
+  letter-spacing: 0;
+  font-size: 10.5px;
+}
+
+/* 容量 */
+.cap-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+.cap-free {
+  font-size: 23px;
+  font-weight: 640;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.cap-of { font-size: 11.5px; color: var(--text-2); }
+
+.overall {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.overall i {
+  display: block;
+  height: 100%;
+  width: 2.92%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+.overall-cap {
+  font-size: 10.5px;
+  color: var(--text-3);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.breakdown-label {
+  font-size: 11px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.bar {
+  height: 9px;
+  border-radius: 5px;
+  overflow: hidden;
+  display: flex;
+  gap: 1px;
+  background: var(--track);
+  margin-bottom: 10px;
+}
+.bar i { display: block; height: 100%; }
+
+.legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+}
+.leg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  min-width: 0;
+}
+.leg .sw {
+  width: 8px; height: 8px;
+  border-radius: 2.5px;
+  flex: 0 0 auto;
+}
+.leg .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leg .vl {
+  margin-left: auto;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+/* 键值网格 */
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  font-size: 11.5px;
+}
+.kv dt { color: var(--text-2); white-space: nowrap; }
+.kv dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.pill {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1.5px 6px;
+  border-radius: 20px;
+  letter-spacing: .01em;
+}
+.pill.ok   { background: color-mix(in srgb, var(--green) 18%, transparent);  color: var(--green); }
+.pill.warn { background: color-mix(in srgb, var(--orange) 20%, transparent); color: var(--orange); }
+.pill.bad  { background: color-mix(in srgb, var(--red) 18%, transparent);    color: var(--red); }
+.pill.mute { background: var(--fill); color: var(--text-2); }
+
+.life-wrap { display: flex; align-items: center; gap: 7px; }
+.life {
+  width: 54px; height: 5px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.life i {
+  display: block; height: 100%;
+  width: 97%;
+  background: var(--green);
+  border-radius: 3px;
+}
+
+/* 检查项 */
+.checks { display: flex; flex-direction: column; gap: 2px; }
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 6px;
+  border-radius: 6px;
+  margin: 0 -6px;
+}
+.check:hover { background: var(--fill); }
+.check .ic {
+  width: 14px; height: 14px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+}
+.check .body { flex: 1 1 auto; min-width: 0; }
+.check .t {
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.check .d {
+  font-size: 10.5px;
+  color: var(--text-2);
+  line-height: 1.45;
+  margin-top: 1px;
+}
+.copy {
+  appearance: none;
+  border: 1px solid var(--pop-border);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  white-space: nowrap;
+}
+.copy:hover { background: var(--fill-hover); color: var(--text); }
+.copy.done { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+
+/* 占用进程 */
+.procs { display: flex; flex-direction: column; gap: 1px; }
+.proc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  margin: 0 -6px;
+}
+.proc:hover { background: var(--fill); }
+.proc .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proc .pid { color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 10.5px; }
+.tag {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.tag.gui { background: color-mix(in srgb, var(--orange) 20%, transparent); color: var(--orange); }
+.tag.dae { background: var(--fill); color: var(--text-2); }
+
+.deep-scan {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  padding: 6px 0 0;
+  cursor: pointer;
+  text-align: left;
+}
+.deep-scan:hover { text-decoration: underline; }
+
+/* 底部按钮 */
+.foot { padding: 11px 14px 13px; }
+.btn {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 590;
+  padding: 9px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.18);
+}
+.btn:hover { filter: brightness(1.07); }
+.btn:active { filter: brightness(.94); }
+.btn.ghost {
+  background: var(--fill);
+  color: var(--text);
+  box-shadow: none;
+}
+.btn.ghost:hover { background: var(--fill-hover); filter: none; }
+.foot-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+  text-align: center;
+  margin-top: 7px;
+  line-height: 1.45;
+}
+
+/* ---------- 弹出中：步骤列表 ---------- */
+
+.steps { display: flex; flex-direction: column; gap: 0; }
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12px;
+  padding: 6px 0;
+}
+.step .sic {
+  width: 15px; height: 15px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  margin-top: .5px;
+}
+.step .sbody { flex: 1 1 auto; min-width: 0; }
+.step .sd {
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin-top: 1px;
+}
+.step.pending { color: var(--text-3); }
+.step.pending .sic { color: var(--text-3); }
+
+.ring {
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--track);
+  border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .ring { animation-duration: 2.4s; }
+}
+
+.hollow {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  opacity: .55;
+}
+
+/* ---------- 检测视图 ---------- */
+
+.subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px 10px;
+}
+.back {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px 3px 2px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+.back:hover { background: var(--fill); }
+.subhead .st {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rescan {
+  appearance: none;
+  border: 1px solid var(--pop-border);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.rescan:hover { background: var(--fill-hover); color: var(--text); }
+
+.scan-meta {
+  font-size: 10.5px;
+  color: var(--text-3);
+  padding: 0 14px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.scan-meta .lv {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.grp { padding: 10px 14px 12px; }
+.grp-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+.grp-head .gt {
+  font-size: 10.5px;
+  font-weight: 640;
+  letter-spacing: .04em;
+}
+.grp-head .gc {
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.grp-note {
+  font-size: 10.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+  margin: -2px 0 8px;
+}
+
+.hold {
+  border: 1px solid var(--sep);
+  border-radius: 7px;
+  margin-bottom: 5px;
+  overflow: hidden;
+  background: var(--fill);
+}
+.hold summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  font-size: 11.5px;
+}
+.hold summary::-webkit-details-marker { display: none; }
+.hold summary:hover { background: var(--fill-hover); }
+.hold .chev {
+  color: var(--text-3);
+  flex: 0 0 auto;
+  transition: transform .15s ease;
+}
+.hold[open] .chev { transform: rotate(90deg); }
+.hold .hn {
+  font-weight: 550;
+  flex: 0 0 auto;
+  max-width: 44%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hold .hu {
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+.hold .hf {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+.hold .files {
+  border-top: 1px solid var(--sep);
+  padding: 7px 9px 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.75;
+  color: var(--text-2);
+  word-break: break-all;
+}
+.hold .files .more { color: var(--text-3); font-family: inherit; }
+
+.perm-note {
+  margin: 2px 14px 0;
+  padding: 9px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--orange) 28%, transparent);
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--text);
+  display: flex;
+  gap: 7px;
+}
+.perm-note .pi { color: var(--orange); flex: 0 0 auto; margin-top: 1px; }
+.perm-note b { font-weight: 620; }
+
+/* ---------- 已弹出 / 未连接 ---------- */
+
+.blank {
+  padding: 26px 20px 24px;
+  text-align: center;
+}
+.blank .bg-glyph {
+  width: 46px; height: 46px;
+  margin: 0 auto 12px;
+  border-radius: 11px;
+  background: var(--fill);
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+}
+.blank h3 {
+  margin: 0 0 5px;
+  font-size: 14px;
+  font-weight: 620;
+  letter-spacing: -.01em;
+}
+.blank p {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+.blank .ok-glyph { color: var(--green); background: color-mix(in srgb, var(--green) 15%, transparent); }
+
+.state-hide { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="preview-bar">
+  <div class="seg" role="tablist" id="stateSeg">
+    <button role="tab" aria-selected="true"  data-state="on">已连接</button>
+    <button role="tab" aria-selected="false" data-state="scan">检测</button>
+    <button role="tab" aria-selected="false" data-state="ejecting">弹出中</button>
+    <button role="tab" aria-selected="false" data-state="ejected">已弹出</button>
+    <button role="tab" aria-selected="false" data-state="off">未连接</button>
+  </div>
+  <span class="spacer"></span>
+  <div class="seg" role="tablist" id="themeSeg">
+    <button role="tab" aria-selected="true"  data-theme="light">浅色</button>
+    <button role="tab" aria-selected="false" data-theme="dark">深色</button>
+  </div>
+</div>
+
+<div class="preview-note">
+  设计稿 · 非成品。宽度 380pt，即菜单栏 popover 的真实尺寸。<br>
+  容量、型号、链路速率、SMART、Spotlight / Time Machine / disksleep 全部是
+  <strong>2026-09-06 于本机实测的真实值</strong>；
+  <code>TBW / 剩余寿命 / 温度</code> 是占位（需装 smartmontools 才能读），
+  「谁在使用」区的进程是示例数据；其中<strong>系统进程一栏是真的</strong>——fseventsd(332)、mds_stores(546/27680) 此刻确实持有该卷。
+</div>
+
+<div class="stage">
+  <div class="menubar">
+    <span class="mb-item">100%</span>
+    <span class="mb-active" title="DevDisk">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <rect x="1.6" y="3.4" width="12.8" height="9.2" rx="2.2" stroke="currentColor" stroke-width="1.4"/>
+        <circle cx="11.4" cy="8" r="1.25" fill="currentColor"/>
+        <path d="M4.2 8h3.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span class="mb-item">周六 20:47</span>
+  </div>
+</div>
+<div class="tail"><i></i></div>
+
+<div class="panel state-on" id="panel">
+
+  <!-- ================= 头部 ================= -->
+  <div class="head">
+    <div class="disk-glyph">
+      <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <rect x="1.4" y="3.2" width="13.2" height="9.6" rx="2.4" stroke="#fff" stroke-width="1.5"/>
+        <circle cx="11.6" cy="8" r="1.35" fill="#fff"/>
+        <path d="M4 8h3.8" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div class="head-text">
+      <div class="vol-name">
+        <span class="dot" id="hdDot"></span>
+        Developer
+      </div>
+      <div class="vol-sub" id="hdSub">Colorful CN700 512GB PRO · APFS</div>
+    </div>
+    <button class="icon-btn" title="刷新" aria-label="刷新">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M13.6 8a5.6 5.6 0 1 1-1.9-4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M13.4 1.6v2.6h-2.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <button class="icon-btn" title="设置" aria-label="设置">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="1.9" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M8 1.8v1.5M8 12.7v1.5M2.6 8H1.1M14.9 8h-1.5M4.2 4.2 3.1 3.1M12.9 12.9l-1.1-1.1M11.8 4.2l1.1-1.1M3.1 12.9l1.1-1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ============ 已连接：主体 ============ -->
+  <div id="bodyOn">
+    <hr class="sep">
+
+    <!-- 容量 -->
+    <div class="section">
+      <div class="cap-top">
+        <span class="cap-free">496.8 GB</span>
+        <span class="cap-of">可用 · 共 511.9 GB</span>
+      </div>
+      <div class="overall"><i></i></div>
+      <div class="overall-cap">
+        <span>已用 15.0 GB（2.9%）</span>
+        <span>APFS · 不区分大小写</span>
+      </div>
+
+      <div class="breakdown-label">已用空间构成</div>
+      <div class="bar">
+        <i style="width:63.1%;background:var(--seg-android)"   title="Android 9.44 GB"></i>
+        <i style="width:23.0%;background:var(--seg-apps)"       title="Applications 3.45 GB"></i>
+        <i style="width:7.5%;background:var(--seg-xcode)"       title="Xcode 1.12 GB"></i>
+        <i style="width:3.8%;background:var(--seg-projects)"    title="Projects 565.8 MB"></i>
+        <i style="width:2.4%;background:var(--seg-java)"        title="Java 352.0 MB"></i>
+        <i style="width:0.2%;background:var(--seg-other)"       title="其他 27.6 MB"></i>
+      </div>
+      <div class="legend">
+        <div class="leg"><span class="sw" style="background:var(--seg-android)"></span><span class="nm">Android</span><span class="vl">9.44 GB</span></div>
+        <div class="leg"><span class="sw" style="background:var(--seg-apps)"></span><span class="nm">Applications</span><span class="vl">3.45 GB</span></div>
+        <div class="leg"><span class="sw" style="background:var(--seg-xcode)"></span><span class="nm">Xcode</span><span class="vl">1.12 GB</span></div>
+        <div class="leg"><span class="sw" style="background:var(--seg-projects)"></span><span class="nm">Projects</span><span class="vl">565.8 MB</span></div>
+        <div class="leg"><span class="sw" style="background:var(--seg-java)"></span><span class="nm">Java</span><span class="vl">352.0 MB</span></div>
+        <div class="leg"><span class="sw" style="background:var(--seg-other)"></span><span class="nm">其他</span><span class="vl">27.6 MB</span></div>
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <!-- 硬件与健康 -->
+    <div class="section">
+      <div class="sec-head">
+        <span>硬件与健康</span>
+        <span class="aside" style="color:var(--text-3)">CN700 · H260610a</span>
+      </div>
+      <dl class="kv">
+        <dt>接口</dt>
+        <dd>PCIe 4.0 ×4 · 16.0 GT/s</dd>
+
+        <dt>SMART</dt>
+        <dd><span class="pill ok">Verified</span></dd>
+
+        <dt>TRIM</dt>
+        <dd><span class="pill ok">已启用</span></dd>
+
+        <dt>累计写入</dt>
+        <dd>4.21 TB</dd>
+
+        <dt>剩余寿命</dt>
+        <dd>
+          <span class="life-wrap">
+            <span class="life"><i></i></span>
+            <span>97%</span>
+          </span>
+        </dd>
+
+        <dt>通电时间</dt>
+        <dd>318 小时</dd>
+
+        <dt>温度</dt>
+        <dd>44 °C</dd>
+      </dl>
+    </div>
+
+    <hr class="sep">
+
+    <!-- 配置检查 -->
+    <div class="section">
+      <div class="sec-head">
+        <span>配置检查</span>
+        <span class="aside" style="color:var(--orange)">4 项需注意</span>
+      </div>
+      <div class="checks">
+
+        <div class="check">
+          <span class="ic" style="color:var(--red)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.9v4M8 11.1h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </span>
+          <div class="body">
+            <div class="t">未加密</div>
+            <div class="d">随身携带的盘，含源码与签名凭据。丢失即全部泄露。</div>
+          </div>
+          <button class="copy" data-cmd="open /System/Library/PreferencePanes/Security.prefPane">前往</button>
+        </div>
+
+        <div class="check">
+          <span class="ic" style="color:var(--orange)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.2 14.5 13.4H1.5L8 2.2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.6v2.7M8 11.5h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </span>
+          <div class="body">
+            <div class="t">Time Machine 已排除整卷</div>
+            <div class="d">Projects 与今后的签名 keystore 都不在备份内。</div>
+          </div>
+          <button class="copy" data-cmd="sudo tmutil removeexclusion /Volumes/Developer">复制命令</button>
+        </div>
+
+        <div class="check">
+          <span class="ic" style="color:var(--orange)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.2 14.5 13.4H1.5L8 2.2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.6v2.7M8 11.5h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </span>
+          <div class="body">
+            <div class="t">Spotlight 正在索引</div>
+            <div class="d">55,006 个缓存文件被反复索引，白耗构建时的 IO。</div>
+          </div>
+          <button class="copy" data-cmd="sudo mdutil -i off /Volumes/Developer">复制命令</button>
+        </div>
+
+        <div class="check">
+          <span class="ic" style="color:var(--orange)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.2 14.5 13.4H1.5L8 2.2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.6v2.7M8 11.5h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </span>
+          <div class="body">
+            <div class="t">磁盘休眠 10 分钟</div>
+            <div class="d">外置 NVMe 掉出总线会让正在跑的构建中断。</div>
+          </div>
+          <button class="copy" data-cmd="sudo pmset -a disksleep 0">复制命令</button>
+        </div>
+
+        <div class="check">
+          <span class="ic" style="color:var(--green)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="body">
+            <div class="t">所有权已启用</div>
+            <div class="d">文件权限与可执行位保持正确。</div>
+          </div>
+        </div>
+
+        <div class="check">
+          <span class="ic" style="color:var(--green)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="body">
+            <div class="t">挂载点正常</div>
+            <div class="d">/Volumes/Developer，无 “Developer 1” 残留。</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <!-- 谁在使用 -->
+    <div class="section">
+      <div class="sec-head">
+        <span>谁在使用</span>
+        <span class="aside" style="color:var(--text-2)">3 个你的进程 · 3 个系统进程</span>
+      </div>
+      <div class="procs">
+        <div class="proc">
+          <span class="nm">Android Studio</span>
+          <span class="pid">4821</span>
+          <span class="tag gui">请求退出</span>
+        </div>
+        <div class="proc">
+          <span class="nm">GradleDaemon</span>
+          <span class="pid">5194</span>
+          <span class="tag dae">自动停止</span>
+        </div>
+        <div class="proc">
+          <span class="nm">adb</span>
+          <span class="pid">5233</span>
+          <span class="tag dae">自动停止</span>
+        </div>
+        <div class="proc" style="color:var(--text-2)">
+          <span class="nm">fseventsd、mds_stores ×2</span>
+          <span class="tag dae">系统</span>
+        </div>
+      </div>
+      <button class="deep-scan" data-goto="scan">查看详情并重新检测…</button>
+    </div>
+
+    <hr class="sep">
+
+    <div class="foot">
+      <button class="btn" id="ejectBtn">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M8 2.6 13.4 9H2.6L8 2.6Z" fill="currentColor"/>
+          <rect x="2.6" y="11.2" width="10.8" height="2.2" rx="1.1" fill="currentColor"/>
+        </svg>
+        安全弹出
+      </button>
+      <div class="foot-hint">将先请求 Android Studio 退出，再停止守护进程</div>
+    </div>
+  </div>
+
+  <!-- ============ 检测：谁在使用 ============ -->
+  <div id="bodyScan" class="state-hide">
+    <hr class="sep">
+    <div class="subhead">
+      <button class="back" data-goto="on">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        返回
+      </button>
+      <span class="st">谁在使用 Developer</span>
+      <button class="rescan" id="rescanBtn">重新检测</button>
+    </div>
+    <div class="scan-meta">
+      <span class="lv">完整检测</span>
+      <span>·</span><span>12 秒前</span>
+      <span>·</span><span>遍历 81,982 个文件，用时 4.1 秒</span>
+    </div>
+
+    <hr class="sep">
+
+    <!-- 需要你决定 -->
+    <div class="grp">
+      <div class="grp-head">
+        <span class="gt" style="color:var(--orange)">需要你决定</span>
+        <span class="gc">1 个</span>
+      </div>
+      <div class="grp-note">弹出时会发送退出请求，由应用自己弹保存对话框。绝不强杀。</div>
+
+      <details class="hold">
+        <summary>
+          <svg class="chev" width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="hn">Android Studio</span>
+          <span class="hu">4821 · example</span>
+          <span class="hf">1,284 个文件</span>
+        </summary>
+        <div class="files">
+          /Volumes/Developer/Projects/Murmur-CI/.gradle/8.14/checksums.lock<br>
+          /Volumes/Developer/Android/sdk/platforms/android-36/android.jar<br>
+          /Volumes/Developer/Android/gradle/caches/journal-1/file-access.bin<br>
+          <span class="more">…另有 1,281 个</span>
+        </div>
+      </details>
+    </div>
+
+    <hr class="sep">
+
+    <!-- 会自动停止 -->
+    <div class="grp">
+      <div class="grp-head">
+        <span class="gt" style="color:var(--text-2)">会自动停止</span>
+        <span class="gc">2 个</span>
+      </div>
+      <div class="grp-note">开发守护进程，不持有未保存数据，下次构建自动重启。</div>
+
+      <details class="hold">
+        <summary>
+          <svg class="chev" width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="hn">GradleDaemon</span>
+          <span class="hu">5194 · example</span>
+          <span class="hf">892 个文件</span>
+        </summary>
+        <div class="files">
+          /Volumes/Developer/Android/gradle/caches/modules-2/modules-2.lock<br>
+          /Volumes/Developer/Android/gradle/daemon/8.14/registry.bin<br>
+          <span class="more">…另有 890 个</span>
+        </div>
+      </details>
+
+      <details class="hold">
+        <summary>
+          <svg class="chev" width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="hn">adb</span>
+          <span class="hu">5233 · example</span>
+          <span class="hf">3 个文件</span>
+        </summary>
+        <div class="files">
+          /Volumes/Developer/Android/sdk/platform-tools/adb<br>
+          <span class="more">…另有 2 个</span>
+        </div>
+      </details>
+    </div>
+
+    <hr class="sep">
+
+    <!-- 系统进程 -->
+    <div class="grp">
+      <div class="grp-head">
+        <span class="gt" style="color:var(--text-3)">系统进程</span>
+        <span class="gc">3 个</span>
+      </div>
+      <div class="grp-note">
+        不由本程序处理。<code style="font-size:9.5px">diskutil eject</code> 会让它们自行释放。
+      </div>
+
+      <details class="hold">
+        <summary>
+          <svg class="chev" width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="hn">mds_stores ×2</span>
+          <span class="hu">546, 27680 · _mds_stores</span>
+          <span class="hf">Spotlight 索引</span>
+        </summary>
+        <div class="files">
+          /Volumes/Developer/.Spotlight-V100/Store-V2/…<br>
+          <span class="more">关掉本卷的 Spotlight 索引后它们就不再碰这块盘 → 见「配置检查」</span>
+        </div>
+      </details>
+
+      <details class="hold">
+        <summary>
+          <svg class="chev" width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="hn">fseventsd</span>
+          <span class="hu">332 · root</span>
+          <span class="hf">文件变更日志</span>
+        </summary>
+        <div class="files">
+          /Volumes/Developer/.fseventsd/0000000001e62941<br>
+          <span class="more">任何已挂载的卷都会被它持有，属正常现象</span>
+        </div>
+      </details>
+    </div>
+
+    <hr class="sep">
+
+    <div class="grp" style="padding-bottom:10px">
+      <div class="perm-note">
+        <span class="pi">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.4v3.4M8 5.2h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span>
+        <span>
+          <b>普通权限只能看到你自己的进程。</b>
+          上面的系统进程是按「卷已挂载 + Spotlight 索引开启」推断的，不是扫出来的——
+          <code style="font-size:9.5px">lsof</code> 看不见其他用户的文件句柄。
+          <br><a href="#" style="color:var(--accent);text-decoration:none">以管理员身份完整检测…</a>
+        </span>
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="foot">
+      <button class="btn" data-goto="ejecting">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M8 2.6 13.4 9H2.6L8 2.6Z" fill="currentColor"/>
+          <rect x="2.6" y="11.2" width="10.8" height="2.2" rx="1.1" fill="currentColor"/>
+        </svg>
+        仍然安全弹出
+      </button>
+    </div>
+  </div>
+
+  <!-- ============ 弹出中 ============ -->
+  <div id="bodyEjecting" class="state-hide">
+    <hr class="sep">
+    <div class="section">
+      <div class="sec-head"><span>正在安全弹出</span><span class="aside" style="color:var(--text-2)">5 / 7</span></div>
+      <div class="steps">
+
+        <div class="step">
+          <span class="sic" style="color:var(--green)">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="sbody">扫描占用者<div class="sd">发现 1 个应用、2 个守护进程</div></div>
+        </div>
+
+        <div class="step">
+          <span class="sic" style="color:var(--green)">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="sbody">请求 Android Studio 退出<div class="sd">已退出（无未保存内容）</div></div>
+        </div>
+
+        <div class="step">
+          <span class="sic" style="color:var(--green)">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="sbody">停止 Gradle daemon<div class="sd">1 个进程已结束</div></div>
+        </div>
+
+        <div class="step">
+          <span class="sic" style="color:var(--green)">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="sbody">停止 Kotlin 编译 daemon<div class="sd">未运行，跳过</div></div>
+        </div>
+
+        <div class="step">
+          <span class="sic" style="color:var(--green)">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="sbody">关闭 adb server<div class="sd">已关闭</div></div>
+        </div>
+
+        <div class="step">
+          <span class="sic"><span class="ring"></span></span>
+          <div class="sbody">复查占用<div class="sd">正在检查残留的文件句柄…</div></div>
+        </div>
+
+        <div class="step pending">
+          <span class="sic"><span class="hollow"></span></span>
+          <div class="sbody">卸载卷</div>
+        </div>
+
+      </div>
+    </div>
+    <hr class="sep">
+    <div class="foot">
+      <button class="btn ghost" data-goto="on">中止</button>
+      <div class="foot-hint">中止不会撤销已停止的进程</div>
+    </div>
+  </div>
+
+  <!-- ============ 已弹出 ============ -->
+  <div id="bodyEjected" class="state-hide">
+    <hr class="sep">
+    <div class="blank">
+      <div class="bg-glyph ok-glyph">
+        <svg width="22" height="22" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.6" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M5.2 8.2 7.1 10.1l3.7-4.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h3>可以安全拔线</h3>
+      <p>Developer 已卸载，无残留挂载点。<br>耗时 6.2 秒 · 停止了 1 个应用、2 个守护进程。</p>
+    </div>
+    <hr class="sep">
+    <div class="foot">
+      <button class="btn ghost" data-goto="off">好</button>
+    </div>
+  </div>
+
+  <!-- ============ 未连接 ============ -->
+  <div id="bodyOff" class="state-hide">
+    <hr class="sep">
+    <div class="blank">
+      <div class="bg-glyph">
+        <svg width="22" height="22" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1.4" y="3.2" width="13.2" height="9.6" rx="2.4" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M2.6 2.2 13.4 13.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <h3>Developer 未连接</h3>
+      <p>插上后自动恢复。<br><span style="color:var(--orange)">此时请勿打开 Android Studio</span>——它可能在内置盘重建 SDK。</p>
+    </div>
+    <hr class="sep">
+    <div class="foot">
+      <div class="foot-hint" style="margin-top:0">上次弹出：今天 20:47 · 正常</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var panel   = document.getElementById('panel');
+  var hdDot   = document.getElementById('hdDot');
+  var hdSub   = document.getElementById('hdSub');
+  var bodies  = {
+    on:       document.getElementById('bodyOn'),
+    scan:     document.getElementById('bodyScan'),
+    ejecting: document.getElementById('bodyEjecting'),
+    ejected:  document.getElementById('bodyEjected'),
+    off:      document.getElementById('bodyOff')
+  };
+  var meta = {
+    on:       { dot: '',      sub: 'Colorful CN700 512GB PRO · APFS' },
+    scan:     { dot: '',      sub: '6 个进程正在使用' },
+    ejecting: { dot: 'busy',  sub: '正在卸载…' },
+    ejected:  { dot: 'off',   sub: '已卸载 · 可安全拔线' },
+    off:      { dot: 'off',   sub: '未连接' }
+  };
+
+  function setState(name) {
+    Object.keys(bodies).forEach(function (k) {
+      bodies[k].classList.toggle('state-hide', k !== name);
+    });
+    panel.className = 'panel state-' + name;
+    hdDot.className = 'dot ' + meta[name].dot;
+    hdSub.textContent = meta[name].sub;
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#stateSeg button'),
+      function (b) { b.setAttribute('aria-selected', String(b.dataset.state === name)); }
+    );
+  }
+
+  document.getElementById('stateSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (b) setState(b.dataset.state);
+  });
+
+  document.getElementById('themeSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    document.documentElement.setAttribute('data-theme', b.dataset.theme);
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#themeSeg button'),
+      function (x) { x.setAttribute('aria-selected', String(x === b)); }
+    );
+  });
+
+  document.getElementById('rescanBtn').addEventListener('click', function () {
+    var b = this, t = b.textContent;
+    b.textContent = '检测中…';
+    b.disabled = true;
+    setTimeout(function () { b.textContent = t; b.disabled = false; }, 1500);
+  });
+
+  document.getElementById('ejectBtn').addEventListener('click', function () {
+    setState('ejecting');
+    setTimeout(function () {
+      if (panel.classList.contains('state-ejecting')) setState('ejected');
+    }, 2600);
+  });
+
+  document.addEventListener('click', function (e) {
+    var g = e.target.closest('[data-goto]');
+    if (g) setState(g.dataset.goto);
+
+    var c = e.target.closest('.copy');
+    if (c && c.dataset.cmd) {
+      var t = c.textContent;
+      navigator.clipboard.writeText(c.dataset.cmd).then(function () {
+        c.textContent = '已复制';
+        c.classList.add('done');
+        setTimeout(function () { c.textContent = t; c.classList.remove('done'); }, 1400);
+      }, function () {});
+    }
+  });
+
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.querySelector('#themeSeg button[data-theme="dark"]').click();
+  }
+})();
+</script>
+</body>
+</html>

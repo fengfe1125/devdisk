@@ -1,0 +1,85 @@
+{
+  "SPNVMeDataType" : [
+    {
+      "_items" : [
+        {
+          "_name" : "APPLE SSD AP0256Z",
+          "bsd_name" : "disk0",
+          "detachable_drive" : "no",
+          "device_model" : "APPLE SSD AP0256Z",
+          "device_revision" : "2973.120",
+          "device_serial" : "0000000000000000",
+          "partition_map_type" : "guid_partition_map_type",
+          "removable_media" : "no",
+          "size" : "251 GB",
+          "size_in_bytes" : 251000193024,
+          "smart_status" : "Verified",
+          "spnvme_trim_support" : "Yes",
+          "volumes" : [
+            {
+              "_name" : "iSCPreboot",
+              "bsd_name" : "disk0s1",
+              "iocontent" : "Apple_APFS_ISC",
+              "size" : "524.3 MB",
+              "size_in_bytes" : 524288000
+            },
+            {
+              "_name" : "Macintosh HD - Data",
+              "bsd_name" : "disk0s2",
+              "iocontent" : "Apple_APFS",
+              "size" : "245.11 GB",
+              "size_in_bytes" : 245107195904
+            },
+            {
+              "_name" : "Recovery",
+              "bsd_name" : "disk0s3",
+              "iocontent" : "Apple_APFS_Recovery",
+              "size" : "5.37 GB",
+              "size_in_bytes" : 5368664064
+            }
+          ]
+        }
+      ],
+      "_name" : "Apple SSD Controller"
+    },
+    {
+      "_items" : [
+        {
+          "_name" : "Colorful CN700 512GB PRO",
+          "bsd_name" : "disk6",
+          "detachable_drive" : "no",
+          "device_model" : "Colorful CN700 512GB PRO",
+          "device_revision" : "H260610a",
+          "device_serial" : "SN00000000000000",
+          "partition_map_type" : "guid_partition_map_type",
+          "removable_media" : "no",
+          "size" : "512.11 GB",
+          "size_in_bytes" : 512110190592,
+          "smart_status" : "Verified",
+          "spnvme_linkspeed" : "16.0 GT/s",
+          "spnvme_linkwidth" : "x4",
+          "spnvme_trim_support" : "Yes",
+          "volumes" : [
+            {
+              "_name" : "EFI",
+              "bsd_name" : "disk6s1",
+              "file_system" : "MS-DOS FAT32",
+              "iocontent" : "EFI",
+              "size" : "209.7 MB",
+              "size_in_bytes" : 209715200,
+              "volume_uuid" : "0E239BC6-F960-3107-89CF-1C97F78BB46B"
+            },
+            {
+              "_name" : "Developer",
+              "bsd_name" : "disk6s2",
+              "iocontent" : "Apple_APFS",
+              "size" : "511.9 GB",
+              "size_in_bytes" : 511900434432
+            }
+          ]
+        }
+      ],
+      "_name" : "Generic SSD Controller"
+    }
+  ]
+}

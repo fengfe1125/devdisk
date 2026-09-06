@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>DevDisk</string>
+	<key>CFBundleDisplayName</key>
+	<string>DevDisk</string>
+	<key>CFBundleExecutable</key>
+	<string>DevDisk</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<!-- Must stay stable: macOS keys Automation permission to the bundle id, so
+	     changing it makes every rebuild look like a new app and re-prompts. -->
+	<key>CFBundleIdentifier</key>
+	<string>com.sakura.devdisk</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- Semantic version, matched by the git tag (v1.0.0) and compared against
+	     the latest GitHub release by UpdateChecker. -->
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<!-- Menu bar agent: no Dock icon, no main window. -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- Required to ask Android Studio / Xcode to quit via AppleScript. Without this
+	     key the Apple Event fails silently rather than prompting. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>DevDisk 需要请求 Android Studio、Xcode 等应用退出，以便安全弹出外置开发盘。它只发送「退出」指令，由应用自行处理未保存的内容。</string>
+	<key>NSHumanReadableCopyright</key>
+	<string></string>
+</dict>
+</plist>
