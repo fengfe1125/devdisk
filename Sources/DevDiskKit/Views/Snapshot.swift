@@ -54,6 +54,27 @@ public enum Snapshot {
         return true
     }
 
+    /// `DevDisk --check-update [version]` runs a real update check against GitHub
+    /// and prints the verdict. Pass a version to simulate running an older build.
+    public static func runUpdateCheck(arguments: [String]) async -> Bool {
+        guard let i = arguments.firstIndex(of: "--check-update") else { return false }
+        let pretend = i + 1 < arguments.count && !arguments[i + 1].hasPrefix("-")
+            ? arguments[i + 1] : AppVersion.current
+
+        let checker = UpdateChecker(
+            currentVersion: pretend,
+            defaults: UserDefaults(suiteName: "devdisk.cli") ?? .standard)
+        print("当前版本 \(pretend) — 正在查询 GitHub…")
+        await checker.check(force: true)
+
+        if let r = checker.available {
+            print("有新版本 \(r.version)\n\(r.url.absoluteString)")
+        } else {
+            print("已是最新（或无法获取）")
+        }
+        return true
+    }
+
     public static func run(arguments: [String]) -> Bool {
         guard let i = arguments.firstIndex(of: "--snapshot"),
               i + 1 < arguments.count else { return false }

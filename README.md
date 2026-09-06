@@ -124,6 +124,7 @@ swift build
 ```bash
 .build/debug/DevDisk --snapshot <输出目录> [挂载点]   # 把各界面渲染成 PNG
 .build/debug/DevDisk --eject <挂载点>                # 命令行跑一遍弹出流程
+.build/debug/DevDisk --check-update [版本号]         # 对真实 GitHub API 跑一次更新检查
 ```
 
 `--snapshot` 用 `ImageRenderer` 直接渲染真实 SwiftUI 视图（数据走真实探针），因为菜单栏 agent 没有可截图的普通窗口。注意 `.borderless` / `.link` / `Menu` 这几种按钮样式会桥接到 AppKit 控件、`ImageRenderer` 画不出来——界面里因此统一用 `.plain` 加显式样式。
