@@ -75,6 +75,31 @@ public enum Snapshot {
         return true
     }
 
+    /// `DevDisk --selftest` verifies a packaged build can actually reach everything
+    /// it needs, and exits non-zero if not. Run by package.sh and by CI, because a
+    /// missing resource only surfaces at launch — a build that compiles, packages
+    /// and signs cleanly can still die instantly on a user's machine.
+    public static func selftest() -> Bool {
+        var problems: [String] = []
+
+        let missing = MenuBarIcon.missing
+        if missing.isEmpty {
+            print("  ✓ 菜单栏图标 5/5")
+        } else {
+            problems.append("菜单栏图标缺失: " + missing.joined(separator: ", "))
+        }
+
+        print("  ✓ 版本 \(AppVersion.current)")
+        if let id = Bundle.main.bundleIdentifier {
+            print("  ✓ bundle id \(id)")
+        } else {
+            problems.append("Info.plist 未被读取到，bundle id 为空")
+        }
+
+        for p in problems { print("  ✗ " + p) }
+        return problems.isEmpty
+    }
+
     public static func run(arguments: [String]) -> Bool {
         guard let i = arguments.firstIndex(of: "--snapshot"),
               i + 1 < arguments.count else { return false }

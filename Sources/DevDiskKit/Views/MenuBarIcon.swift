@@ -8,6 +8,13 @@ import SwiftUI
 /// for light/dark menu bars and for the highlighted state. Without it the icon
 /// renders as flat black artwork and turns into an unreadable blob on a dark menu
 /// bar. The PDFs are pure black on transparent for exactly this reason.
+///
+/// Deliberately does **not** use `Bundle.module`. SwiftPM's generated accessor looks
+/// only in `Bundle.main.bundleURL/<name>.bundle` — the .app's *root*, not
+/// `Contents/Resources` — and otherwise at an absolute build path from whatever
+/// machine compiled it. Inside a packaged app both miss, and the accessor calls
+/// `fatalError`, so the app dies on launch instead of degrading. These lookups
+/// cover both layouts and never trap.
 enum MenuBarIcon {
 
     static func name(for screen: DiskStore.Screen, hasWarnings: Bool) -> String {
@@ -19,6 +26,8 @@ enum MenuBarIcon {
             return hasWarnings ? "warning" : "connected"
         }
     }
+
+    static let allNames = ["connected", "warning", "ejecting", "ejected", "disconnected"]
 
     /// SF Symbols equivalents, used if the bundled artwork cannot be loaded so the
     /// menu bar never ends up with a blank slot.
@@ -32,19 +41,52 @@ enum MenuBarIcon {
         }
     }
 
+    /// Where the artwork can legitimately live, in preference order.
+    static func url(for name: String) -> URL? {
+        // 1. Packaged app: Contents/Resources/MenuBarIcons/<name>.pdf
+        if let u = Bundle.main.url(
+            forResource: name, withExtension: "pdf", subdirectory: "MenuBarIcons") {
+            return u
+        }
+
+        let fm = FileManager.default
+        // 2. `swift build` / `swift run`: the SwiftPM resource bundle sits next to
+        //    the executable.
+        let spm = Bundle.main.bundleURL
+            .appendingPathComponent("DevDisk_DevDiskKit.bundle")
+            .appendingPathComponent("MenuBarIcons")
+            .appendingPathComponent(name + ".pdf")
+        if fm.fileExists(atPath: spm.path) { return spm }
+
+        // 3. Same bundle reached through this type's own framework, for good measure.
+        let own = Bundle(for: BundleToken.self).bundleURL
+            .appendingPathComponent("MenuBarIcons")
+            .appendingPathComponent(name + ".pdf")
+        if fm.fileExists(atPath: own.path) { return own }
+
+        return nil
+    }
+
+    private final class BundleToken {}
+
     private static var cache: [String: NSImage] = [:]
 
     static func image(named name: String) -> NSImage? {
         if let hit = cache[name] { return hit }
-        guard let url = Bundle.module.url(
-                forResource: name, withExtension: "pdf", subdirectory: "MenuBarIcons"),
-              let image = NSImage(contentsOf: url)
+        guard let url = url(for: name), let image = NSImage(contentsOf: url)
         else { return nil }
 
         image.isTemplate = true
         image.size = NSSize(width: 16, height: 16)
         cache[name] = image
         return image
+    }
+
+    /// Names that could not be resolved. Empty means the artwork is wired up
+    /// correctly; used by `--selftest` so a broken package fails in CI rather than
+    /// on a user's menu bar.
+    static var missing: [String] {
+        allNames.filter { image(named: $0) == nil }
     }
 }
 

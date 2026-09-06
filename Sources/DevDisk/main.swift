@@ -3,6 +3,11 @@ import DevDiskKit
 
 // `--snapshot <dir> [mount]` renders the panel screens to PNG instead of starting
 // the menu bar agent; a menu bar app has no ordinary window to screenshot.
+if CommandLine.arguments.contains("--selftest") {
+    let ok = MainActor.assumeIsolated { Snapshot.selftest() }
+    exit(ok ? 0 : 1)
+}
+
 if CommandLine.arguments.contains("--check-update") {
     // UpdateChecker is @MainActor, so the work has to run on the main thread —
     // which means the main thread must not be blocked waiting for it. Blocking on
