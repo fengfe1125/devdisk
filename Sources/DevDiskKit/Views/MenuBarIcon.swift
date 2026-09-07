@@ -17,12 +17,17 @@ import SwiftUI
 /// cover both layouts and never trap.
 enum MenuBarIcon {
 
-    static func name(for screen: DiskStore.Screen, hasWarnings: Bool) -> String {
+    /// The icon reports the state of the *volume*, not which screen happens to be
+    /// open. Deriving it from the screen alone made the icon claim "connected" the
+    /// moment you opened settings on a disconnected drive.
+    static func name(for screen: DiskStore.Screen,
+                     mounted: Bool,
+                     hasWarnings: Bool) -> String {
         switch screen {
-        case .ejecting:     return "ejecting"
-        case .ejected:      return "ejected"
-        case .disconnected: return "disconnected"
-        case .connected, .scan:
+        case .ejecting: return "ejecting"
+        case .ejected:  return "ejected"
+        default:
+            guard mounted else { return "disconnected" }
             return hasWarnings ? "warning" : "connected"
         }
     }
@@ -31,12 +36,14 @@ enum MenuBarIcon {
 
     /// SF Symbols equivalents, used if the bundled artwork cannot be loaded so the
     /// menu bar never ends up with a blank slot.
-    static func fallbackSymbol(for screen: DiskStore.Screen, hasWarnings: Bool) -> String {
+    static func fallbackSymbol(for screen: DiskStore.Screen,
+                               mounted: Bool,
+                               hasWarnings: Bool) -> String {
         switch screen {
-        case .ejecting:     return "externaldrive.badge.minus"
-        case .ejected:      return "externaldrive.badge.checkmark"
-        case .disconnected: return "externaldrive"
-        case .connected, .scan:
+        case .ejecting: return "externaldrive.badge.minus"
+        case .ejected:  return "externaldrive.badge.checkmark"
+        default:
+            guard mounted else { return "externaldrive" }
             return hasWarnings ? "externaldrive.badge.exclamationmark" : "externaldrive.fill"
         }
     }
@@ -93,15 +100,16 @@ enum MenuBarIcon {
 /// Menu bar label that prefers the bundled artwork and degrades to SF Symbols.
 struct MenuBarLabel: View {
     let screen: DiskStore.Screen
+    let mounted: Bool
     let hasWarnings: Bool
 
     var body: some View {
-        if let image = MenuBarIcon.image(
-            named: MenuBarIcon.name(for: screen, hasWarnings: hasWarnings)) {
+        if let image = MenuBarIcon.image(named: MenuBarIcon.name(
+            for: screen, mounted: mounted, hasWarnings: hasWarnings)) {
             Image(nsImage: image)
         } else {
             Image(systemName: MenuBarIcon.fallbackSymbol(
-                for: screen, hasWarnings: hasWarnings))
+                for: screen, mounted: mounted, hasWarnings: hasWarnings))
         }
     }
 }

@@ -32,9 +32,16 @@ public struct DevDiskApp: App {
                 .environmentObject(store)
                 .environmentObject(updates)
                 .frame(width: 380)
-                .onAppear { updates.checkIfDue() }
+                // Opening the popover is the moment the user is looking, so re-probe
+                // then. Relying only on mount notifications leaves the panel showing
+                // whatever it last saw if one is ever missed.
+                .onAppear {
+                    store.refresh()
+                    updates.checkIfDue()
+                }
         } label: {
             MenuBarLabel(screen: store.screen,
+                         mounted: store.snapshot != nil,
                          hasWarnings: (store.snapshot?.warningCount ?? 0) > 0)
         }
         .menuBarExtraStyle(.window)

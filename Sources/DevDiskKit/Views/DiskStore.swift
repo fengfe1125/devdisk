@@ -11,6 +11,7 @@ final class DiskStore: ObservableObject {
     enum Screen: Equatable {
         case connected
         case scan
+        case settings
         case ejecting
         case ejected(TimeInterval, apps: Int, daemons: Int)
         case disconnected
@@ -73,6 +74,12 @@ final class DiskStore: ObservableObject {
             occupancy = nil
             return
         }
+
+        // Correct a stale screen immediately rather than waiting for the probe: the
+        // eject-success screen is kept deliberately while the volume is gone, and
+        // without this it survives a remount whose notification was missed.
+        if case .ejected = screen { screen = .connected }
+        if screen == .disconnected { screen = .connected }
 
         let mount = mountPoint
         let runner = self.runner

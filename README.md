@@ -55,7 +55,7 @@ cd devdisk && ./package.sh /Applications
 | ✓ 对勾 | 已弹出，可安全拔线 |
 | ╱ 斜杠 | 未连接 |
 
-## 设置（⌘,）
+## 设置
 
 面板显示哪些内容由你决定——密度这件事没有普适答案，猜出来的结果要么高过屏幕，要么空得不值得点开。
 
@@ -70,6 +70,10 @@ cd devdisk && ./package.sh /Applications
 | 全部 | 再加累计读取、可用备用块、通电次数、非正常断电、介质错误 |
 
 **通用**：监视哪个卷、是否检查更新、立即检查。
+
+设置有两个入口：面板右上角的齿轮（弹层和窗口里都有，就地切到设置屏），以及 ⌘, 打开的标准设置窗口。两者读同一批 `UserDefaults` 键，改哪边都同步。
+
+弹层里刻意不走 SwiftUI 的 `Settings` 场景——`SettingsLink` 在 MenuBarExtra 里不触发，`NSApp.sendAction(showSettingsWindow:)` 在弹层为 key 窗口时也只是静默返回、窗口根本不会被创建。
 
 也可以直接写 defaults：
 
@@ -138,6 +142,8 @@ swift build
 .build/debug/DevDisk --eject <挂载点>                # 命令行跑一遍弹出流程
 .build/debug/DevDisk --check-update [版本号]         # 对真实 GitHub API 跑一次更新检查
 ```
+
+**快照验证覆盖不到弹层。** 弹层的 ScrollView 高度、MenuBarExtra 的自适应尺寸、以及依赖应用活跃状态的 AppKit 动作，全都只能靠真机点开菜单栏图标验证——这三类问题各出过一次，都是快照和窗口路径漏掉的。
 
 `--snapshot` 用 `ImageRenderer` 直接渲染真实 SwiftUI 视图（数据走真实探针）。两处限制：`.borderless` / `.link` / `Menu` 这几种按钮样式桥接到 AppKit 控件，画不出来——界面里因此统一用 `.plain` 加显式样式；**`ScrollView` 的内容也渲染不出（一片空白）**，所以快照模式用 `.snapshot` 呈现方式渲染不带滚动壳的版本，滚动壳本身只能靠跑真实应用验证。
 

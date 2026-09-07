@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+/// Carries the measured height of the scrolling content up to the popover frame.
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct PanelView: View {
     @EnvironmentObject var store: DiskStore
     @EnvironmentObject var updates: UpdateChecker
@@ -15,6 +23,10 @@ struct PanelView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(PanelSetting.version) private var showVersion = true
 
+    /// Natural height of the scrolling content, measured so the popover can be sized
+    /// to fit it.
+    @State private var contentHeight: CGFloat = 0
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -26,10 +38,20 @@ struct PanelView: View {
             // stay put so eject is always one click away.
             switch presentation {
             case .popover:
+                // A ScrollView has no intrinsic content height, so `maxHeight` alone
+                // gives MenuBarExtra nothing to size against and the whole body
+                // collapses — leaving just the header and the eject button. The
+                // Window scene hid this because defaultSize forced a height.
+                // Measure the content and pin the frame to it, capped.
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) { screen }
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: ContentHeightKey.self,
+                                                   value: g.size.height)
+                        })
                 }
-                .frame(maxHeight: UI.maxScrollHeight)
+                .frame(height: min(max(contentHeight, 60), UI.maxScrollHeight))
+                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
                 .scrollBounceBehavior(.basedOnSize)
             case .window:
                 ScrollView(.vertical) {
@@ -60,6 +82,7 @@ struct PanelView: View {
         switch store.screen {
         case .connected:            ConnectedView()
         case .scan:                 ScanView()
+        case .settings:             SettingsPanel()
         case .ejecting:             EjectingView()
         case .ejected(_, let a, let d): EjectedView(apps: a, daemons: d)
         case .disconnected:         DisconnectedView()
@@ -70,6 +93,7 @@ struct PanelView: View {
         switch store.screen {
         case .connected:    ConnectedFooter()
         case .scan:         ScanFooter()
+        case .settings:     SettingsFooter()
         case .ejecting:     EjectingFooter()
         case .ejected:      EjectedFooter()
         case .disconnected: DisconnectedFooter()
@@ -100,15 +124,11 @@ struct PanelView: View {
             if store.screen == .connected || store.screen == .scan {
                 IconButton(symbol: "arrow.clockwise", help: "刷新") { store.refresh() }
             }
-            SettingsLink {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+            IconButton(symbol: "gearshape", help: "设置") {
+                store.screen = store.screen == .settings
+                    ? (store.isMounted ? .connected : .disconnected)
+                    : .settings
             }
-            .buttonStyle(.plain)
-            .help("设置")
 
             if presentation == .popover {
                 IconButton(symbol: "macwindow", help: "在窗口中打开") {
@@ -161,6 +181,8 @@ struct PanelView: View {
         case .ejecting:     return "正在卸载…"
         case .ejected:      return "已卸载 · 可安全拔线"
         case .disconnected: return "未连接"
+        case .settings:
+            return "设置"
         case .scan:
             let n = store.occupancy?.holders.count ?? 0
             return "\(n) 个进程正在使用"
