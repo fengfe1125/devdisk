@@ -32,6 +32,10 @@ final class DiskStore: ObservableObject {
 
     private let runner: CommandRunner
     private let work = DispatchQueue(label: "devdisk.probe", qos: .userInitiated)
+    /// Eject gets its own queue. Sharing the probe queue meant an eject could sit
+    /// behind a `du -sk` walk of the whole volume (seconds), so the panel switched
+    /// to "正在安全弹出" and then showed 0/5 with nothing moving.
+    private let ejectQueue = DispatchQueue(label: "devdisk.eject", qos: .userInitiated)
     private var observers: [NSObjectProtocol] = []
 
     init(runner: CommandRunner = SystemCommandRunner()) {
@@ -66,9 +70,15 @@ final class DiskStore: ObservableObject {
 
     func refresh() {
         guard isMounted else {
-            // Keep the eject-success screen up until the drive is physically unplugged
-            // so the "safe to disconnect" confirmation is not lost instantly.
-            if case .ejected = screen {} else { screen = .disconnected }
+            // Keep the eject-success screen up until the drive is physically
+            // unplugged so the "safe to disconnect" confirmation is not lost.
+            // `.ejecting` is likewise left alone: diskutil's own unmount fires
+            // didUnmountNotification mid-flow, and rewriting the screen here yanked
+            // the user off the progress list before the flow could report its result.
+            switch screen {
+            case .ejected, .ejecting: break
+            default: screen = .disconnected
+            }
             snapshot = nil
             directories = []
             occupancy = nil
@@ -77,9 +87,12 @@ final class DiskStore: ObservableObject {
 
         // Correct a stale screen immediately rather than waiting for the probe: the
         // eject-success screen is kept deliberately while the volume is gone, and
-        // without this it survives a remount whose notification was missed.
-        if case .ejected = screen { screen = .connected }
-        if screen == .disconnected { screen = .connected }
+        // without this it survives a remount whose notification was missed. An
+        // in-flight eject is never touched.
+        if screen != .ejecting {
+            if case .ejected = screen { screen = .connected }
+            if screen == .disconnected { screen = .connected }
+        }
 
         let mount = mountPoint
         let runner = self.runner
@@ -92,8 +105,10 @@ final class DiskStore: ObservableObject {
                     self.snapshot = snap
                     self.occupancy = snap.occupancy
                     self.lastError = nil
-                    if self.screen == .disconnected { self.screen = .connected }
-                    if case .ejected = self.screen { self.screen = .connected }
+                    if self.screen != .ejecting {
+                        if self.screen == .disconnected { self.screen = .connected }
+                        if case .ejected = self.screen { self.screen = .connected }
+                    }
                 case .failure(let e):
                     self.lastError = e.localizedDescription
                 }
@@ -175,12 +190,15 @@ final class DiskStore: ObservableObject {
 
     func eject() {
         guard isMounted else { return }
+        // Re-entrancy guard: a second click used to start a concurrent flow.
+        guard screen != .ejecting else { return }
         screen = .ejecting
         ejectSteps = []
+        lastError = nil
 
         let mount = mountPoint
         let runner = self.runner
-        work.async { [weak self] in
+        ejectQueue.async { [weak self] in
             let indexing = try? ConfigProbe(runner: runner).spotlightIndexing(mountPoint: mount)
             let flow = EjectFlow(runner: runner, mountPoint: mount)
             flow.onUpdate = { steps in

@@ -123,7 +123,8 @@ struct Occupancy {
         let start = Date()
         // -F emits one field per line (p pid, c command, L login, n name), which is
         // far safer to parse than lsof's aligned columns.
-        let r = try runner.run(Tool.lsof, ["-w", "-F", "pcLn", "+D", mountPoint])
+        let r = try runner.run(Tool.lsof, ["-w", "-F", "pcLn", "+D", mountPoint],
+                               timeout: Deadline.scan)
         let sets = Self.parseLsof(r.text)
         let procs = try processes()
         let byPID = Dictionary(uniqueKeysWithValues: procs.map { ($0.pid, $0) })

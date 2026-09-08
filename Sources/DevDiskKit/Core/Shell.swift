@@ -4,9 +4,22 @@ struct CommandResult {
     let stdout: Data
     let stderr: String
     let exitCode: Int32
+    /// True when the command blew its deadline and had to be killed. Distinguishing
+    /// this from a plain non-zero exit lets callers say "timed out" instead of
+    /// reporting a misleading failure.
+    var timedOut: Bool = false
 
     var text: String { String(data: stdout, encoding: .utf8) ?? "" }
-    var ok: Bool { exitCode == 0 }
+    var ok: Bool { exitCode == 0 && !timedOut }
+}
+
+/// Per-command deadlines. `diskutil eject` either succeeds or names a dissenter
+/// quickly, so it gets a short one; the tree-walking commands get longer.
+enum Deadline {
+    static let quick: TimeInterval = 15    // diskutil info, ps, mdutil, tmutil, pmset
+    static let eject: TimeInterval = 30
+    static let scan: TimeInterval = 30     // lsof +D
+    static let walk: TimeInterval = 60     // du -sk
 }
 
 enum CommandError: Error, LocalizedError {
@@ -24,6 +37,19 @@ enum CommandError: Error, LocalizedError {
 protocol CommandRunner {
     @discardableResult
     func run(_ path: String, _ args: [String]) throws -> CommandResult
+
+    /// Runs with an explicit deadline. Mocks inherit the default below and ignore it.
+    @discardableResult
+    func run(_ path: String, _ args: [String],
+             timeout: TimeInterval) throws -> CommandResult
+}
+
+extension CommandRunner {
+    @discardableResult
+    func run(_ path: String, _ args: [String],
+             timeout: TimeInterval) throws -> CommandResult {
+        try run(path, args)
+    }
 }
 
 /// A GUI app launched from Finder does not inherit the user's shell PATH, so every
@@ -58,10 +84,23 @@ enum Tool {
 }
 
 struct SystemCommandRunner: CommandRunner {
-    /// Commands that walk the whole volume (du, lsof +D) can run for seconds.
-    var timeout: TimeInterval = 60
+    /// Default deadline for commands that do not ask for a specific one.
+    var timeout: TimeInterval = Deadline.quick
 
     func run(_ path: String, _ args: [String]) throws -> CommandResult {
+        try run(path, args, timeout: timeout)
+    }
+
+    /// Runs a child process under a hard deadline.
+    ///
+    /// The previous version sent SIGTERM on timeout and then called
+    /// `waitUntilExit()` unconditionally — which blocks forever if the child does
+    /// not die. `diskutil` waiting on `diskarbitrationd` does exactly that, and it
+    /// hung the whole eject flow with the UI stuck on "正在安全弹出" and no way for
+    /// the user to know why. This escalates SIGTERM → SIGKILL and, if even that
+    /// fails, gives up and returns rather than blocking the caller.
+    func run(_ path: String, _ args: [String],
+             timeout deadline: TimeInterval) throws -> CommandResult {
         guard FileManager.default.isExecutableFile(atPath: path) else {
             throw CommandError.notFound(path)
         }
@@ -76,31 +115,59 @@ struct SystemCommandRunner: CommandRunner {
 
         do { try proc.run() } catch { throw CommandError.launchFailed(path, error) }
 
-        // Drain both pipes on background queues; a full pipe buffer would otherwise
-        // deadlock against waitUntilExit for anything verbose (lsof, system_profiler).
-        var outData = Data(), errData = Data()
+        // Drain both pipes off-thread; a full pipe buffer would otherwise deadlock
+        // against process exit for anything verbose (lsof, system_profiler). The
+        // box is lock-protected because the two reads run concurrently.
+        let box = OutputBox()
         let group = DispatchGroup()
-        for (pipe, sink) in [(out, { outData = $0 }), (err, { errData = $0 })] {
+        for (pipe, isStdout) in [(out, true), (err, false)] {
             group.enter()
             DispatchQueue.global().async {
-                sink(pipe.fileHandleForReading.readDataToEndOfFile())
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                box.set(data, stdout: isStdout)
                 group.leave()
             }
         }
 
-        let deadline = DispatchTime.now() + timeout
-        if group.wait(timeout: deadline) == .timedOut {
-            proc.terminate()
-            _ = group.wait(timeout: .now() + 2)
+        var timedOut = false
+        if group.wait(timeout: .now() + deadline) == .timedOut {
+            timedOut = true
+            proc.terminate()                                   // SIGTERM
+            if group.wait(timeout: .now() + 2) == .timedOut {
+                kill(proc.processIdentifier, SIGKILL)          // then SIGKILL
+                _ = group.wait(timeout: .now() + 2)
+            }
         }
-        proc.waitUntilExit()
+
+        // Never `waitUntilExit()` — it has no bound. Poll instead, and return even
+        // if the process somehow outlives SIGKILL (an uninterruptible kernel wait),
+        // so a wedged child can never take the app down with it.
+        let reapBy = Date().addingTimeInterval(2)
+        while proc.isRunning && Date() < reapBy {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
 
         return CommandResult(
-            stdout: outData,
-            stderr: String(data: errData, encoding: .utf8) ?? "",
-            exitCode: proc.terminationStatus
+            stdout: box.stdout,
+            stderr: String(data: box.stderr, encoding: .utf8) ?? "",
+            exitCode: proc.isRunning ? -1 : proc.terminationStatus,
+            timedOut: timedOut
         )
     }
+}
+
+/// Collects the two pipe reads, which land on different threads.
+private final class OutputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var out = Data()
+    private var err = Data()
+
+    func set(_ data: Data, stdout: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        if stdout { out = data } else { err = data }
+    }
+    var stdout: Data { lock.lock(); defer { lock.unlock() }; return out }
+    var stderr: Data { lock.lock(); defer { lock.unlock() }; return err }
 }
 
 /// Returns canned output keyed by "<basename> <args joined>", and records every

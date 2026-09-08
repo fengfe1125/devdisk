@@ -124,7 +124,8 @@ struct VolumeProbe {
         let visible = entries.filter { !$0.hasPrefix(".") }.sorted()
         guard !visible.isEmpty else { return [] }
 
-        let r = try runner.run(Tool.du, ["-sk"] + visible.map { mountPoint + "/" + $0 })
+        let r = try runner.run(Tool.du, ["-sk"] + visible.map { mountPoint + "/" + $0 },
+                               timeout: Deadline.walk)
         return Self.parseDu(r.text).sorted { $0.bytes > $1.bytes }
     }
 

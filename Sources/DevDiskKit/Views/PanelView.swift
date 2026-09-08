@@ -54,10 +54,20 @@ struct PanelView: View {
                 .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
                 .scrollBounceBehavior(.basedOnSize)
             case .window:
+                // Same measurement as the popover, with a looser cap. `maxHeight:
+                // .infinity` made the body stretch to fill a fixed 700pt window, so
+                // the short screens (ejecting, ejected, disconnected) left a large
+                // empty band between the content and the pinned action area.
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) { screen }
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: ContentHeightKey.self,
+                                                   value: g.size.height)
+                        })
                 }
-                .frame(maxHeight: .infinity)
+                .frame(height: min(max(contentHeight, 60), UI.maxWindowBodyHeight))
+                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+                .scrollBounceBehavior(.basedOnSize)
             case .snapshot:
                 VStack(alignment: .leading, spacing: 0) { screen }
             }
@@ -72,10 +82,7 @@ struct PanelView: View {
                 }
             }
         }
-        .frame(width: presentation == .window ? nil : UI.width)
-        .frame(minWidth: presentation == .window ? UI.width : nil,
-               maxWidth: presentation == .window ? .infinity : nil,
-               maxHeight: presentation == .window ? .infinity : nil)
+        .frame(width: UI.width)
     }
 
     @ViewBuilder private var screen: some View {

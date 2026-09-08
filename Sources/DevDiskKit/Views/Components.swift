@@ -13,6 +13,12 @@ enum UI {
         let available = NSScreen.main?.visibleFrame.height ?? 800
         return min(520, max(320, available - 180))
     }
+
+    /// The window may grow taller than the popover, but still has to fit on screen.
+    @MainActor static var maxWindowBodyHeight: CGFloat {
+        let available = NSScreen.main?.visibleFrame.height ?? 900
+        return max(320, available - 220)
+    }
     static let hPad: CGFloat = 14
     static let vPad: CGFloat = 12
 

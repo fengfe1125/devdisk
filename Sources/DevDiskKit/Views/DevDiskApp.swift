@@ -16,10 +16,14 @@ public struct DevDiskApp: App {
             PanelView(presentation: .window)
                 .environmentObject(store)
                 .environmentObject(updates)
-                .onAppear { updates.checkIfDue() }
+                .onAppear {
+                    store.refresh()
+                    updates.checkIfDue()
+                }
         }
-        .defaultSize(width: 400, height: 700)
-        .windowResizability(.contentMinSize)
+        // The window fits its content: each screen has a very different natural
+        // height, and a fixed size left the short ones mostly empty.
+        .windowResizability(.contentSize)
 
         Settings {
             SettingsView()

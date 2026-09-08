@@ -74,7 +74,8 @@ final class EjectFlow {
         }
         let apps = report.holders(.guiApp)
         let daemons = report.holders(.daemon)
-        set("scan", .done("发现 \(apps.count) 个应用、\(daemons.count) 个守护进程"))
+        set("scan", .done("发现 \(apps.count) 个应用、\(daemons.count) 个守护进程 · "
+                          + Self.secs(now().timeIntervalSince(started))))
 
         // 2 — ask GUI apps to quit
         set("apps", .running)
@@ -109,27 +110,49 @@ final class EjectFlow {
         // without it the step cheerfully reports "nothing of yours is holding it" one
         // line before the unmount fails on a process the pattern list never knew about.
         set("recheck", .running)
+        let recheckStart = now()
         let after = (try? occ.fullScan(mountPoint: mountPoint, indexingOn: indexingOn))?.mine ?? []
+        let recheckTook = Self.secs(now().timeIntervalSince(recheckStart))
+        let leftovers = after.map(\.name)
         if after.isEmpty {
-            set("recheck", .done("已无你的进程占用"))
+            set("recheck", .done("已无你的进程占用 · " + recheckTook))
         } else {
             let names = after.map { h in
                 h.openFileCount.map { "\(h.name) 持有 \($0) 个文件" } ?? h.name
             }
-            set("recheck", .done("仍有 " + names.joined(separator: "、")))
+            set("recheck", .done("仍有 " + names.joined(separator: "、") + " · " + recheckTook))
         }
 
         // 5 — unmount. diskutil's dissenter PID is the authoritative answer when this
         // fails, and is the only place we can obtain it.
         set("unmount", .running)
-        let r = try? runner.run(Tool.diskutil, ["eject", mountPoint])
-        guard let r, r.ok else {
-            let raw = [r?.text ?? "", r?.stderr ?? ""].joined(separator: "\n")
-            let msg = Self.dissenterMessage(raw) ?? "卸载失败，卷仍在使用中"
+        let unmountStart = now()
+        let r = try? runner.run(Tool.diskutil, ["eject", mountPoint],
+                                timeout: Deadline.eject)
+        let unmountTook = now().timeIntervalSince(unmountStart)
+
+        // A timeout is not the same as a refusal, and saying so matters: diskutil
+        // can wedge waiting on diskarbitrationd, and "卸载失败，卷仍在使用中"
+        // would send the user hunting for a process that does not exist.
+        if r?.timedOut == true {
+            let msg = "卸载超时（\(Int(Deadline.eject)) 秒），diskutil 无响应"
             set("unmount", .failed(msg))
             return .aborted(msg)
         }
-        set("unmount", .done(nil))
+        guard let r, r.ok else {
+            let raw = [r?.text ?? "", r?.stderr ?? ""].joined(separator: "\n")
+            var msg = Self.dissenterMessage(raw) ?? "卸载失败，卷仍在使用中"
+            // diskutil names whichever process it happened to ask — often a parent
+            // shell rather than the one actually writing. The recheck saw the whole
+            // set, so name the others too instead of sending the user after a shell.
+            let others = leftovers.filter { !msg.contains($0) }
+            if !others.isEmpty {
+                msg += "；还有 " + others.joined(separator: "、") + " 在持有它"
+            }
+            set("unmount", .failed(msg))
+            return .aborted(msg)
+        }
+        set("unmount", .done(Self.secs(unmountTook)))
 
         return .ejected(now().timeIntervalSince(started),
                         stoppedApps: apps.count,
@@ -161,6 +184,12 @@ final class EjectFlow {
             return app.pids.contains { live.contains($0) }
         }
         return procs.contains { Occupancy.classify($0)?.display == app.name }
+    }
+
+    /// Step durations are shown in the UI so a slow step is visibly slow rather than
+    /// indistinguishable from a wedged one.
+    static func secs(_ t: TimeInterval) -> String {
+        t < 1 ? String(format: "%.0f 毫秒", t * 1000) : String(format: "%.1f 秒", t)
     }
 
     // MARK: - Parsing

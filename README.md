@@ -91,7 +91,7 @@ defaults write com.sakura.devdisk targetMountPoint -string "/Volumes/你的卷�
 
 **谁在使用** —— 见下。
 
-**安全弹出** —— 扫描 → 请求 GUI 应用退出 → 停止守护进程 → 完整复查 → 卸载。
+**安全弹出** —— 扫描 → 请求 GUI 应用退出 → 停止守护进程 → 完整复查 → 卸载。每一步显示耗时；每条命令都有硬性上限，超时会如实报「超时」而不是伪装成失败。
 
 ## 两个设计上的硬约束
 
@@ -133,7 +133,9 @@ swift build
 
 **3. `mdutil -s` 回显 firmlink 解析后的路径**，不是你传进去的那个（传 `/Volumes/X`，回显 `/System/Volumes/Data/Volumes/X`），只能匹配 `Indexing enabled` 子串。
 
-**4. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
+**4. 子进程必须有硬性上限。** 原先超时只发 SIGTERM，然后无条件调用 `waitUntilExit()`——没有上限。子进程若不响应 SIGTERM（`diskutil` 等 `diskarbitrationd` 时正是如此），整个弹出流程永久挂死，界面停在「正在安全弹出」且无从得知原因。现在是 SIGTERM → SIGKILL → 到点就返回，绝不阻塞调用方。另外：SIGKILL 只杀直接子进程，它的孙进程仍持有管道写端，所以不能靠「管道读完」判断结束，必须独立轮询。
+
+**5. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
 
 ### 调试入口
 
