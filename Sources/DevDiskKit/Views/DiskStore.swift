@@ -25,6 +25,11 @@ final class DiskStore: ObservableObject {
     @Published var occupancyScanning = false
     @Published var ejectSteps: [EjectFlow.Step] = []
     @Published var lastError: String?
+    /// Why the last eject stopped. Kept separate from `lastError` because the
+    /// abort path calls `refresh()`, and a successful refresh clears `lastError` —
+    /// which wiped the explanation before the user could read it, so the panel just
+    /// snapped back to normal and the eject looked like it did nothing at all.
+    @Published var ejectFailure: String?
     @Published var lastEjectSummary: String?
 
     /// Which volume this instance watches. Kept in defaults so it survives relaunch.
@@ -195,6 +200,7 @@ final class DiskStore: ObservableObject {
         screen = .ejecting
         ejectSteps = []
         lastError = nil
+        ejectFailure = nil
 
         let mount = mountPoint
         let runner = self.runner
@@ -210,12 +216,13 @@ final class DiskStore: ObservableObject {
                 guard let self else { return }
                 switch outcome {
                 case .ejected(let t, let apps, let daemons):
+                    self.ejectFailure = nil
                     self.screen = .ejected(t, apps: apps, daemons: daemons)
                     self.lastEjectSummary = Self.summary(t, apps: apps, daemons: daemons)
                     self.snapshot = nil
                     self.directories = []
                 case .aborted(let why):
-                    self.lastError = why
+                    self.ejectFailure = why
                     self.screen = .connected
                     self.refresh()
                 }
@@ -234,6 +241,8 @@ final class DiskStore: ObservableObject {
     }
 
     // MARK: - Actions
+
+    func dismissEjectFailure() { ejectFailure = nil }
 
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()

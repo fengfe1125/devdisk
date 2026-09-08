@@ -58,6 +58,7 @@ final class EjectFlow {
             Step(id: "scan",     title: "扫描占用者"),
             Step(id: "apps",     title: "请求应用退出"),
             Step(id: "daemons",  title: "停止守护进程"),
+            Step(id: "images",   title: "推出磁盘映像"),
             Step(id: "recheck",  title: "复查占用"),
             Step(id: "unmount",  title: "卸载卷"),
         ]
@@ -102,6 +103,41 @@ final class EjectFlow {
                 if r?.ok == true { stopped += d.pids.count }
             }
             set("daemons", .done("\(stopped) 个进程已结束"))
+        }
+
+        // 3.5 — attached disk images backed by files on this volume.
+        //
+        // diskimages-helper holds the .dmg open, so the volume cannot unmount, and
+        // diskutil names that helper as the dissenter — a launchd-owned system
+        // process the user can neither kill nor act on. An image can also be
+        // attached without being mounted, in which case it has no Finder presence
+        // at all and there is literally nothing for the user to eject. Read-only
+        // images carry no user data, so they are detached here; writable ones might,
+        // so those stop the flow and are named.
+        set("images", .running)
+        let imageProbe = DiskImageProbe(runner: runner)
+        let images = (try? imageProbe.images(on: mountPoint)) ?? []
+
+        if images.isEmpty {
+            set("images", .skipped("盘上没有已挂载的磁盘映像"))
+        } else {
+            let writable = images.filter(\.writable)
+            if !writable.isEmpty {
+                let names = Set(writable.map(\.name)).sorted().joined(separator: "、")
+                let msg = "盘上有可写的磁盘映像正挂载着：\(names)。先手动推出它，以免丢失其中的改动。"
+                set("images", .failed(msg))
+                return .aborted(msg)
+            }
+            var detached = 0
+            for image in images where imageProbe.detach(image) { detached += 1 }
+            let names = Set(images.map(\.name)).sorted().joined(separator: "、")
+            if detached == images.count {
+                set("images", .done("已推出 \(names)"))
+            } else {
+                let msg = "无法推出磁盘映像 \(names)，卷会因此拒绝卸载"
+                set("images", .failed(msg))
+                return .aborted(msg)
+            }
         }
 
         // 4 — recheck. Deliberately the slow lsof path rather than the pattern-matching

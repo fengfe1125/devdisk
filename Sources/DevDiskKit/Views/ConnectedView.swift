@@ -24,6 +24,10 @@ struct ConnectedView: View {
     var body: some View {
         if let snap = store.snapshot {
             VStack(alignment: .leading, spacing: 0) {
+                if let failure = store.ejectFailure {
+                    EjectFailureBanner(message: failure) { store.dismissEjectFailure() }
+                    Divider1()
+                }
                 let sections = visibleSections(snap)
                 if sections.isEmpty {
                     allHidden

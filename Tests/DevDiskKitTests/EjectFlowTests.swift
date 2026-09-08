@@ -167,7 +167,7 @@ final class EjectFlowTests: XCTestCase {
         _ = f.run(indexingOn: false)
 
         XCTAssertEqual(snapshots.first?.map(\.id),
-                       ["scan", "apps", "daemons", "recheck", "unmount"])
+                       ["scan", "apps", "daemons", "images", "recheck", "unmount"])
         XCTAssertTrue(snapshots.first?.allSatisfy { $0.state == .pending } ?? false)
         // Nothing is left pending or mid-flight once the run returns.
         for step in snapshots.last ?? [] {

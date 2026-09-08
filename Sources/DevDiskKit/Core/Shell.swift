@@ -68,6 +68,7 @@ enum Tool {
     static let kill           = "/bin/kill"
     static let du             = "/usr/bin/du"
     static let osascript      = "/usr/bin/osascript"
+    static let hdiutil        = "/usr/bin/hdiutil"
 
     /// nil when smartmontools is not installed — the health section degrades instead of failing.
     static let smartctl: String? = {
