@@ -228,24 +228,63 @@ struct CapacityBar: View {
         String(format: "%.1f%%", volume.usedFraction * 100)
     }
 
+    /// The palette has six colours, and a bar this narrow cannot show more than a
+    /// handful of slices anyway — a camera card with 14 top-level folders produced
+    /// repeated colours and a bar that overflowed its track.
+    static let maxSegments = 6
+
     private var segments: [(name: String, bytes: Int64, color: Color)] {
-        var s = directories.enumerated().map {
+        let sorted = directories.sorted { $0.bytes > $1.bytes }
+        var s = sorted.prefix(Self.maxSegments).enumerated().map {
             ($0.element.name, $0.element.bytes, UI.segmentColor($0.offset))
         }
-        if other > 0 { s.append(("其他", other, Color.secondary)) }
+        let rest = sorted.dropFirst(Self.maxSegments).reduce(0) { $0 + $1.bytes } + other
+        if rest > 0 { s.append(("其他", rest, Color.secondary)) }
         return s
     }
 
-    @ViewBuilder private var breakdown: some View {
-        let total = max(1, segments.reduce(0) { $0 + $1.bytes })
+    /// Segment widths that always add up to exactly `available`.
+    ///
+    /// The old version multiplied each share by the track width and then applied
+    /// `max(1, …)` per segment, with 1pt of spacing between them. With one segment
+    /// taking 99.6% and fourteen tiny ones, the minimums and gaps pushed the total
+    /// past the track and `clipShape` silently cut the tail off — the bar looked
+    /// truncated. Here the floor is only applied when every segment can have one,
+    /// and any excess comes out of the largest slice.
+    static func segmentWidths(bytes: [Int64], available: CGFloat,
+                              minWidth: CGFloat = 2) -> [CGFloat] {
+        guard !bytes.isEmpty else { return [] }
+        guard available > 0 else { return Array(repeating: 0, count: bytes.count) }
 
+        let total = CGFloat(max(1, bytes.reduce(0, +)))
+        var w = bytes.map { available * CGFloat(max(0, $0)) / total }
+
+        if minWidth * CGFloat(bytes.count) <= available {
+            for i in w.indices where w[i] < minWidth { w[i] = minWidth }
+            let overflow = w.reduce(0, +) - available
+            if overflow > 0, let biggest = w.indices.max(by: { w[$0] < w[$1] }) {
+                w[biggest] = max(minWidth, w[biggest] - overflow)
+            }
+        }
+
+        // Absorb rounding drift so the bar fills its track exactly.
+        let sum = w.reduce(0, +)
+        if sum > 0 { w = w.map { $0 * available / sum } }
+        return w
+    }
+
+    @ViewBuilder private var breakdown: some View {
         VStack(alignment: .leading, spacing: 10) {
             GeometryReader { geo in
-                HStack(spacing: 1) {
-                    ForEach(segments, id: \.name) { seg in
-                        Rectangle().fill(seg.color)
-                            .frame(width: max(1, geo.size.width
-                                   * CGFloat(seg.bytes) / CGFloat(total)))
+                // No inter-segment spacing: gaps were another source of overflow, and
+                // adjacent colours read fine without them.
+                let widths = Self.segmentWidths(bytes: segments.map(\.bytes),
+                                                available: geo.size.width)
+                HStack(spacing: 0) {
+                    ForEach(Array(segments.indices), id: \.self) { i in
+                        Rectangle()
+                            .fill(segments[i].color)
+                            .frame(width: widths[i])
                     }
                 }
                 .clipShape(Capsule())

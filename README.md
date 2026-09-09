@@ -87,7 +87,7 @@ defaults write com.sakura.devdisk targetMountPoint -string "/Volumes/你的卷�
 
 ## 它做什么
 
-**容量** —— 分两层：一条按总容量的真实占比条，加一条把已用空间归一化后的目录构成。盘只用了 3% 时，单条总量比例尺会把所有目录压成看不清的一条线。
+**容量** —— 分两层：一条按总容量的真实占比条，加一条把已用空间归一化后的目录构成。盘只用了 3% 时，单条总量比例尺会把所有目录压成看不清的一条线。构成条只画占用最大的 6 个目录，其余并入「其他」——调色板只有 6 色，而且一张相机卡有十几个顶层目录时，条子会被挤爆（见下）。
 
 **硬件与健康** —— 型号、固件、PCIe 代数与链路速率、SMART、TRIM，以及 smartctl 提供的写入量 / 寿命 / 通电时间 / 温度。
 
@@ -128,7 +128,7 @@ Android Studio / Xcode 走 AppleScript `quit`，由应用自己弹保存对话�
 ## 开发
 
 ```bash
-swift test        # 100 个测试
+swift test        # 108 个测试
 swift build
 ./package.sh -    # 只构建，不安装
 ```
@@ -149,7 +149,9 @@ swift build
 
 **6. 外置盘发现不能用 `diskutil list external`。** 雷雳/USB4 的 NVMe 硬盘盒报 `Removable: No`、`Detachable: No`，按这些键过滤会漏掉本应用最主要的目标。唯一对它为真的是 `RemovableMediaOrExternalDevice`，所以发现是逐卷 `diskutil info` 而非一次 `list`。
 
-**7. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
+**7. 分段条的宽度必须精确加总。** 原先是逐段 `max(1, 宽度 × 占比)` 再配 1pt 间距。相机卡上 DCIM 独占 99.6%、后面跟着 14 个极小目录，于是最小宽度与间距把总和推过了轨道宽度，`clipShape` 悄悄把尾部切掉——看上去就是「条显示不全」。现在宽度由一个纯函数算出并保证总和恰好等于可用宽度，最小宽度只在放得下时才施加，超出部分从最大的那段扣。
+
+**8. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
 
 ### 调试入口
 
