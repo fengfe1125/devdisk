@@ -19,9 +19,9 @@
 	<!-- Semantic version, matched by the git tag (v1.0.0) and compared against
 	     the latest GitHub release by UpdateChecker. -->
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.8</string>
+	<string>1.0.9</string>
 	<key>CFBundleVersion</key>
-	<string>9</string>
+	<string>10</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<!-- Required to ask Android Studio / Xcode to quit via AppleScript. Without this

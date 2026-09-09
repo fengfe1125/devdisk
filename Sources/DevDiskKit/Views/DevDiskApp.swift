@@ -36,6 +36,7 @@ public struct DevDiskApp: App {
                 .environmentObject(store)
                 .environmentObject(updates)
                 .frame(width: 380)
+                .popoverChrome()
                 // Opening the popover is the moment the user is looking, so re-probe
                 // then. Relying only on mount notifications leaves the panel showing
                 // whatever it last saw if one is ever missed.
