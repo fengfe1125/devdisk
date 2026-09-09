@@ -94,6 +94,10 @@ private struct GeneralSettingsTab: View {
                     Button("应用") { commit() }
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty
                                   || draft == mountPoint)
+                    if !draft.isEmpty && !FileManager.default.fileExists(atPath: draft) {
+                        Text("该路径当前不存在")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     Spacer()
                     Text(store.isMounted ? "已连接" : "未连接")
                         .font(.caption)
@@ -126,14 +130,16 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { draft = mountPoint }
+        .onAppear { draft = store.pinnedMountPoint }
     }
 
     private func commit() {
-        let v = draft.trimmingCharacters(in: .whitespaces)
-        guard !v.isEmpty else { return }
-        mountPoint = v
-        store.mountPoint = v
+        // Stored verbatim: volume names really do carry trailing spaces (an ExFAT
+        // camera card mounts at "/Volumes/NIKON Z 6  "), and trimming makes the path
+        // stop matching the volume it names. Only a blank entry is rejected.
+        guard !draft.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        mountPoint = draft
+        store.pinnedMountPoint = draft
         store.refresh()
     }
 }

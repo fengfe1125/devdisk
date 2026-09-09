@@ -67,7 +67,7 @@ struct SettingsPanel: View {
 
             PanelSection(title: "监视的卷") {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(store.mountPoint)
+                    Text(store.pinnedMountPoint)
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
                     Text("在设置窗口（⌘,）里可以修改。")

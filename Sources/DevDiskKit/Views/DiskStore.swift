@@ -12,6 +12,7 @@ final class DiskStore: ObservableObject {
         case connected
         case scan
         case settings
+        case drives
         case ejecting
         case ejected(TimeInterval, apps: Int, daemons: Int)
         case disconnected
@@ -32,8 +33,17 @@ final class DiskStore: ObservableObject {
     @Published var ejectFailure: String?
     @Published var lastEjectSummary: String?
 
-    /// Which volume this instance watches. Kept in defaults so it survives relaunch.
-    @AppStorage("targetMountPoint") var mountPoint: String = "/Volumes/Developer"
+    /// The volume the user cares about. It wins whenever it is attached, so
+    /// plugging the dev drive back in returns to it.
+    @AppStorage("targetMountPoint") var pinnedMountPoint: String = "/Volumes/Developer"
+
+    /// The volume currently on screen. Follows the pinned one when that is attached,
+    /// otherwise falls back to whatever external drive is actually there — the panel
+    /// used to sit blank on "未连接" while a camera card was mounted the whole time.
+    @Published var mountPoint: String = ""
+
+    /// External drives found attached, refreshed with every probe.
+    @Published var drives: [DiscoveredVolume] = []
 
     private let runner: CommandRunner
     private let work = DispatchQueue(label: "devdisk.probe", qos: .userInitiated)
@@ -45,6 +55,7 @@ final class DiskStore: ObservableObject {
 
     init(runner: CommandRunner = SystemCommandRunner()) {
         self.runner = runner
+        mountPoint = pinnedMountPoint
         observeMounts()
         refresh()
     }
@@ -74,6 +85,60 @@ final class DiskStore: ObservableObject {
     // MARK: - Refresh
 
     func refresh() {
+        // Discovery runs before anything else so an unplugged pinned volume can hand
+        // over to whatever is actually attached, instead of showing "未连接" while a
+        // drive sits mounted.
+        let runner = self.runner
+        work.async { [weak self] in
+            let found = VolumeDiscovery(runner: runner).drives()
+            Task { @MainActor in self?.applyDiscovery(found) }
+        }
+        refreshCurrent()
+    }
+
+    /// Picks the volume to show, then probes it.
+    private func applyDiscovery(_ found: [DiscoveredVolume]) {
+        drives = found
+        guard screen != .ejecting else { return }
+
+        switch VolumeDiscovery.choose(drives: found, pinned: pinnedMountPoint) {
+        case .pinned(let m), .only(let m):
+            if mountPoint != m {
+                mountPoint = m
+                snapshot = nil
+                directories = []
+                occupancy = nil
+                refreshCurrent()
+            }
+        case .pick:
+            // Several attached and none pinned online: let the user say which.
+            if !found.contains(where: { $0.mountPoint == mountPoint }) {
+                screen = .drives
+            }
+        case .none:
+            if mountPoint != pinnedMountPoint { mountPoint = pinnedMountPoint }
+        }
+    }
+
+    /// Switches to a drive the user picked from the list.
+    func select(_ volume: DiscoveredVolume) {
+        guard screen != .ejecting else { return }
+        mountPoint = volume.mountPoint
+        snapshot = nil
+        directories = []
+        occupancy = nil
+        ejectFailure = nil
+        screen = .connected
+        refreshCurrent()
+    }
+
+    /// Makes a drive the one that wins on reconnect.
+    func pin(_ volume: DiscoveredVolume) {
+        pinnedMountPoint = volume.mountPoint
+        select(volume)
+    }
+
+    private func refreshCurrent() {
         guard isMounted else {
             // Keep the eject-success screen up until the drive is physically
             // unplugged so the "safe to disconnect" confirmation is not lost.
@@ -100,9 +165,9 @@ final class DiskStore: ObservableObject {
         }
 
         let mount = mountPoint
-        let runner = self.runner
+        let probeRunner = self.runner
         work.async { [weak self] in
-            let result = Self.probe(mount: mount, runner: runner)
+            let result = Self.probe(mount: mount, runner: probeRunner)
             Task { @MainActor in
                 guard let self else { return }
                 switch result {
@@ -118,7 +183,7 @@ final class DiskStore: ObservableObject {
                     self.lastError = e.localizedDescription
                 }
             }
-            Self.loadDirectories(mount: mount, runner: runner, into: self)
+            Self.loadDirectories(mount: mount, runner: probeRunner, into: self)
         }
     }
 

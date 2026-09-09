@@ -43,6 +43,10 @@ cd devdisk && ./package.sh /Applications
 
 ## 用法
 
+**自动识别外置盘。** 打开就显示当前接着的那块，不用先去配置路径。点头部的盘名可以切换到别的盘。你可以把某块盘「设为默认」——它一插上就自动切回它，没插时则显示当前接着的那块。
+
+挂载的磁盘映像（下载来的 `.dmg`）和启动盘不会出现在列表里。**这个过滤是必需的**：一个挂载的 DMG 在 `diskutil` 眼里 `RemovableMediaOrExternalDevice` 同样是 `true`，不排掉的话 Downloads 里每个安装包都会被当成硬盘列出来，靠 `BusProtocol == "Disk Image"` 区分。
+
 菜单栏出现一个硬盘图标，程序坞里也有。菜单栏点开是紧凑卡片，需要看全时点卡片右上角的窗口按钮切到可缩放的独立窗口。
 
 图标为实心机身 + 图形挖空的模板图，随状态变化：
@@ -91,7 +95,7 @@ defaults write com.sakura.devdisk targetMountPoint -string "/Volumes/你的卷�
 
 **谁在使用** —— 见下。
 
-**安全弹出** —— 扫描 → 请求 GUI 应用退出 → 停止守护进程 → **推出磁盘映像** → 完整复查 → 卸载。每一步显示耗时；每条命令都有硬性上限，超时会如实报「超时」而不是伪装成失败。失败原因会留在面板顶部，直到你关掉它或重新弹出。每一步显示耗时；每条命令都有硬性上限，超时会如实报「超时」而不是伪装成失败。
+**安全弹出** —— 扫描 → 请求 GUI 应用退出 → 停止守护进程 → **推出磁盘映像** → 完整复查 → 卸载。每一步显示耗时；每条命令都有硬性上限，超时会如实报「超时」而不是伪装成失败。失败原因会留在面板顶部，直到你关掉它或重新弹出。
 
 ## 两个设计上的硬约束
 
@@ -124,7 +128,7 @@ Android Studio / Xcode 走 AppleScript `quit`，由应用自己弹保存对话�
 ## 开发
 
 ```bash
-swift test        # 68 个测试
+swift test        # 100 个测试
 swift build
 ./package.sh -    # 只构建，不安装
 ```
@@ -141,7 +145,11 @@ swift build
 
 **4. 子进程必须有硬性上限。** 原先超时只发 SIGTERM，然后无条件调用 `waitUntilExit()`——没有上限。子进程若不响应 SIGTERM（`diskutil` 等 `diskarbitrationd` 时正是如此），整个弹出流程永久挂死，界面停在「正在安全弹出」且无从得知原因。现在是 SIGTERM → SIGKILL → 到点就返回，绝不阻塞调用方。另外：SIGKILL 只杀直接子进程，它的孙进程仍持有管道写端，所以不能靠「管道读完」判断结束，必须独立轮询。
 
-**5. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
+**5. 卷名可以带尾随空格。** 一张 ExFAT 相机卡真实挂载在 `/Volumes/NIKON Z 6  `——名字末尾两个空格。任何地方顺手 `trimmingCharacters` 都会让后续所有 `diskutil` 调用报「找不到卷」。设置里的挂载点输入框原先就在 trim，已改为原样保存。
+
+**6. 外置盘发现不能用 `diskutil list external`。** 雷雳/USB4 的 NVMe 硬盘盒报 `Removable: No`、`Detachable: No`，按这些键过滤会漏掉本应用最主要的目标。唯一对它为真的是 `RemovableMediaOrExternalDevice`，所以发现是逐卷 `diskutil info` 而非一次 `list`。
+
+**7. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
 
 ### 调试入口
 

@@ -90,6 +90,7 @@ struct PanelView: View {
         case .connected:            ConnectedView()
         case .scan:                 ScanView()
         case .settings:             SettingsPanel()
+        case .drives:               DrivePickerView()
         case .ejecting:             EjectingView()
         case .ejected(_, let a, let d): EjectedView(apps: a, daemons: d)
         case .disconnected:         DisconnectedView()
@@ -101,6 +102,7 @@ struct PanelView: View {
         case .connected:    ConnectedFooter()
         case .scan:         ScanFooter()
         case .settings:     SettingsFooter()
+        case .drives:       DrivePickerFooter()
         case .ejecting:     EjectingFooter()
         case .ejected:      EjectedFooter()
         case .disconnected: DisconnectedFooter()
@@ -112,17 +114,32 @@ struct PanelView: View {
     private var header: some View {
         HStack(spacing: 10) {
             glyph
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Circle().fill(dotColor).frame(width: 7, height: 7)
-                    Text(title)
-                        .font(.system(size: 15, weight: .semibold))
+            Button {
+                store.screen = store.screen == .drives
+                    ? (store.isMounted ? .connected : .disconnected)
+                    : .drives
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Circle().fill(dotColor).frame(width: 7, height: 7)
+                        Text(title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1).truncationMode(.middle)
+                        // Only hint at switching when there is something to switch to.
+                        if store.drives.count > 1 || store.screen == .drives {
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
                 }
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             Spacer(minLength: 4)
 
             // .plain rather than .borderless/.link: those styles bridge to AppKit
@@ -190,6 +207,8 @@ struct PanelView: View {
         case .disconnected: return "未连接"
         case .settings:
             return "设置"
+        case .drives:
+            return store.drives.isEmpty ? "没有外置盘" : "选择要查看的盘"
         case .scan:
             let n = store.occupancy?.holders.count ?? 0
             return "\(n) 个进程正在使用"
