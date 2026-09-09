@@ -6,7 +6,7 @@ enum AppVersion {
     /// Kept in sync with Resources/Info.plist. The plist is the source of truth for
     /// a packaged build; this constant only covers `swift run` during development,
     /// where there is no bundle Info.plist to read.
-    static let fallback = "1.0.9"
+    static let fallback = "1.0.10"
 
     static var current: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")

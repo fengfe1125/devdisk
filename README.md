@@ -155,7 +155,9 @@ swift build
 
 注意方向：让**内容**向内缩（负内边距）在顶部有效，但会把底部的版本行推出窗口下沿被裁掉——修外观不能以丢内容为代价。
 
-**9. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
+**9. 弹层窗口只按内容的「报告高度」定尺寸，而 ScrollView 的报告高度就是你给它的那个数。** 给短内容套一个固定高度的 ScrollView，窗口就会一直保持那个高度：已弹出界面只需 308pt，弹层却停在 633pt，SwiftUI 把卡片在里面垂直居中——上下各一条空带，卡片离状态栏老远。把窗口设成透明之后，那两条带子从灰色变成透明，问题依旧。真正的修法是**内容不超过上限时根本不套 ScrollView**，让它自然定高。
+
+**10. `diskutil eject` 失败时的真实格式是 `dissented by PID 12167 (/usr/bin/tail)`**，不是文档常见的 `PID=N` 形式，而且后面紧跟一行 `Dissenter parent PPID …`——宽松的正则会把父 shell 报成真凶。
 
 ### 调试入口
 

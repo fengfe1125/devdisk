@@ -36,41 +36,13 @@ struct PanelView: View {
             // screen renders ~900pt tall and runs from the menu bar to the bottom of
             // the display. Only the middle scrolls; the header and the primary action
             // stay put so eject is always one click away.
-            switch presentation {
-            case .popover:
-                // A ScrollView has no intrinsic content height, so `maxHeight` alone
-                // gives MenuBarExtra nothing to size against and the whole body
-                // collapses — leaving just the header and the eject button. The
-                // Window scene hid this because defaultSize forced a height.
-                // Measure the content and pin the frame to it, capped.
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 0) { screen }
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: ContentHeightKey.self,
-                                                   value: g.size.height)
-                        })
-                }
-                .frame(height: min(max(contentHeight, 60), UI.maxScrollHeight))
-                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-                .scrollBounceBehavior(.basedOnSize)
-            case .window:
-                // Same measurement as the popover, with a looser cap. `maxHeight:
-                // .infinity` made the body stretch to fill a fixed 700pt window, so
-                // the short screens (ejecting, ejected, disconnected) left a large
-                // empty band between the content and the pinned action area.
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 0) { screen }
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: ContentHeightKey.self,
-                                                   value: g.size.height)
-                        })
-                }
-                .frame(height: min(max(contentHeight, 60), UI.maxWindowBodyHeight))
-                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-                .scrollBounceBehavior(.basedOnSize)
-            case .snapshot:
-                VStack(alignment: .leading, spacing: 0) { screen }
-            }
+            // Scroll only when the content actually needs it. Wrapping short
+            // content in a fixed-height ScrollView left the popover window sized for
+            // the tallest screen it had shown: the ejected card needed 308pt but the
+            // window stayed 633pt, and SwiftUI centred the card in it — a transparent
+            // band above and below, and the card sitting far below the menu bar.
+            body(cap: presentation == .window ? UI.maxWindowBodyHeight
+                                              : UI.maxScrollHeight)
 
             Divider1()
             actionFooter
@@ -83,6 +55,29 @@ struct PanelView: View {
             }
         }
         .frame(width: UI.width)
+    }
+
+    /// Measures the content, and only introduces a scroll view once it exceeds the
+    /// cap — so a short screen reports its true height and the window shrinks to it.
+    @ViewBuilder private func body(cap: CGFloat) -> some View {
+        let measured = VStack(alignment: .leading, spacing: 0) { screen }
+            .background(GeometryReader { g in
+                Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+            })
+
+        Group {
+            if presentation == .snapshot {
+                // ImageRenderer cannot rasterize ScrollView contents.
+                VStack(alignment: .leading, spacing: 0) { screen }
+            } else if contentHeight > cap {
+                ScrollView(.vertical) { measured }
+                    .frame(height: cap)
+                    .scrollBounceBehavior(.basedOnSize)
+            } else {
+                measured
+            }
+        }
+        .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
     }
 
     @ViewBuilder private var screen: some View {
