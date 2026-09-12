@@ -55,6 +55,13 @@ struct PanelView: View {
             }
         }
         .frame(width: UI.width)
+        // The content height is stateful because long screens switch to a bounded
+        // ScrollView. Reset it before measuring a new screen; otherwise a short
+        // ejected/disconnected screen can spend one layout pass inside the old
+        // long-screen height and leave the popover host window oversized.
+        .onChange(of: store.screen) { _, _ in
+            contentHeight = 0
+        }
     }
 
     /// Measures the content, and only introduces a scroll view once it exceeds the

@@ -2,10 +2,9 @@ import SwiftUI
 
 /// Settings rendered inside the panel itself.
 ///
-/// The popover cannot rely on the Settings scene: `SettingsLink` does nothing from
-/// a MenuBarExtra, and `NSApp.sendAction(showSettingsWindow:)` silently returns
-/// without creating a window while the popover is key. An in-panel screen works
-/// identically in the popover and the window, with no AppKit indirection to fail.
+/// The popover cannot rely on the Settings scene: an in-panel screen works
+/// identically in the popover and the window, with no separate settings-window
+/// action to fail while the popover is key.
 /// It reads the same `@AppStorage` keys as the Settings window, so the two stay in
 /// sync automatically.
 struct SettingsPanel: View {

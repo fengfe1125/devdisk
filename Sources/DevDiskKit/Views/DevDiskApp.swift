@@ -1,8 +1,8 @@
 import SwiftUI
 
 public struct DevDiskApp: App {
-    @StateObject private var store = DiskStore()
-    @StateObject private var updates = UpdateChecker()
+    @NSApplicationDelegateAdaptor(DevDiskAppDelegate.self)
+    private var appDelegate
 
     public init() {
         PanelSetting.registerDefaults()
@@ -14,11 +14,11 @@ public struct DevDiskApp: App {
         // is not squeezed into a popover-sized card.
         Window("DevDisk", id: DiskStore.mainWindowID) {
             PanelView(presentation: .window)
-                .environmentObject(store)
-                .environmentObject(updates)
+                .environmentObject(appDelegate.store)
+                .environmentObject(appDelegate.updates)
                 .onAppear {
-                    store.refresh()
-                    updates.checkIfDue()
+                    appDelegate.store.refresh()
+                    appDelegate.updates.checkIfDue()
                 }
         }
         // The window fits its content: each screen has a very different natural
@@ -27,28 +27,28 @@ public struct DevDiskApp: App {
 
         Settings {
             SettingsView()
-                .environmentObject(store)
-                .environmentObject(updates)
+                .environmentObject(appDelegate.store)
+                .environmentObject(appDelegate.updates)
         }
+    }
+}
 
-        MenuBarExtra {
-            PanelView()
-                .environmentObject(store)
-                .environmentObject(updates)
-                .frame(width: 380)
-                .popoverChrome()
-                // Opening the popover is the moment the user is looking, so re-probe
-                // then. Relying only on mount notifications leaves the panel showing
-                // whatever it last saw if one is ever missed.
-                .onAppear {
-                    store.refresh()
-                    updates.checkIfDue()
-                }
-        } label: {
-            MenuBarLabel(screen: store.screen,
-                         mounted: store.snapshot != nil,
-                         hasWarnings: (store.snapshot?.warningCount ?? 0) > 0)
-        }
-        .menuBarExtraStyle(.window)
+@MainActor
+final class DevDiskAppDelegate: NSObject, NSApplicationDelegate {
+    let store: DiskStore
+    let updates: UpdateChecker
+    let statusBar: StatusBarController
+
+    override init() {
+        let store = DiskStore()
+        let updates = UpdateChecker()
+        self.store = store
+        self.updates = updates
+        self.statusBar = StatusBarController(store: store, updates: updates)
+        super.init()
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        statusBar.install()
     }
 }
