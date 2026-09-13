@@ -40,6 +40,13 @@ if [ "$COUNT" != "5" ]; then
     exit 1
 fi
 
+# Localization resources must resolve from this app, without a build-tree fallback.
+for LANGUAGE in en zh-Hans; do
+    mkdir -p "${APP}/Contents/Resources/${LANGUAGE}.lproj"
+    cp "Sources/DevDiskKit/Resources/${LANGUAGE}.lproj/Localizable.strings" "${APP}/Contents/Resources/${LANGUAGE}.lproj/"
+    cp "Resources/${LANGUAGE}.lproj/InfoPlist.strings" "${APP}/Contents/Resources/${LANGUAGE}.lproj/"
+done
+
 echo "==> 签名（ad-hoc）"
 codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /'

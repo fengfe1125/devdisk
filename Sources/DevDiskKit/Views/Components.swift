@@ -62,17 +62,27 @@ extension CheckSeverity {
 // MARK: - Section scaffolding
 
 struct SectionHeader: View {
+    @ObservedObject private var language = LanguageStore.shared
     let title: String
     var aside: String?
     var asideColor: Color = .secondary
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        ViewThatFits(in: .horizontal) {
+            header(horizontal: true).fixedSize(horizontal: true, vertical: false)
+            header(horizontal: false)
+        }
+    }
+
+    private func header(horizontal: Bool) -> some View {
+        let layout = horizontal ? AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+                                : AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+        return layout {
             Text(title)
                 .font(.system(size: 10.5, weight: .semibold))
                 .kerning(0.5)
                 .foregroundStyle(.tertiary)
-            Spacer()
+            if horizontal { Spacer(minLength: 8) }
             if let aside {
                 Text(aside)
                     .font(.system(size: 10.5))
@@ -83,6 +93,7 @@ struct SectionHeader: View {
 }
 
 struct PanelSection<Content: View>: View {
+    @ObservedObject private var language = LanguageStore.shared
     var title: String?
     var aside: String?
     var asideColor: Color = .secondary
@@ -105,6 +116,7 @@ struct PanelSection<Content: View>: View {
 /// Generic over its trailing content so a row can hold a pill or a gauge; a plain
 /// string value gets the convenience initializer below.
 struct KeyValueRow<Trailing: View>: View {
+    @ObservedObject private var language = LanguageStore.shared
     let key: String
     let trailing: Trailing
 
@@ -135,6 +147,7 @@ extension KeyValueRow where Trailing == Text {
 }
 
 struct Pill: View {
+    @ObservedObject private var language = LanguageStore.shared
     let text: String
     var color: Color = .green
 
@@ -154,6 +167,7 @@ struct Pill: View {
 /// the used portion. On a 97%-empty disk a single total-scale bar would compress
 /// every directory into an unreadable sliver.
 struct CapacityBar: View {
+    @ObservedObject private var language = LanguageStore.shared
     let volume: VolumeInfo
     let directories: [DirectoryUsage]
     let loading: Bool
@@ -171,7 +185,7 @@ struct CapacityBar: View {
                 Text(Fmt.bytes(volume.freeBytes))
                     .font(.system(size: 23, weight: .semibold))
                     .monospacedDigit()
-                Text("可用 · 共 \(Fmt.bytes(volume.totalBytes))")
+                Text(L("components.free.total", Fmt.bytes(volume.totalBytes)))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -188,7 +202,7 @@ struct CapacityBar: View {
             .padding(.bottom, 4)
 
             HStack {
-                Text("已用 \(Fmt.bytes(volume.usedBytes))（\(pct)）")
+                Text(L("components.used", Fmt.bytes(volume.usedBytes), pct))
                 Spacer()
                 Text(volume.filesystem)
             }
@@ -198,7 +212,7 @@ struct CapacityBar: View {
             if loading {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("正在统计各目录占用…")
+                    Text(L("components.calculating.folder.usage"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 .padding(.top, 12)
@@ -213,7 +227,7 @@ struct CapacityBar: View {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
                             .rotationEffect(.degrees(expanded ? 90 : 0))
-                        Text("已用空间构成")
+                        Text(L("components.used.space.breakdown"))
                         Spacer()
                     }
                     .font(.system(size: 11))
@@ -243,7 +257,7 @@ struct CapacityBar: View {
             ($0.element.name, $0.element.bytes, UI.segmentColor($0.offset))
         }
         let rest = sorted.dropFirst(Self.maxSegments).reduce(0) { $0 + $1.bytes } + other
-        if rest > 0 { s.append(("其他", rest, Color.secondary)) }
+        if rest > 0 { s.append((L("components.other"), rest, Color.secondary)) }
         return s
     }
 
@@ -318,6 +332,7 @@ struct CapacityBar: View {
 // MARK: - Configuration check row
 
 struct CheckRow: View {
+    @ObservedObject private var language = LanguageStore.shared
     let check: ConfigCheck
     let onCopy: (String) -> Void
     let onOpen: (String) -> Void
@@ -345,7 +360,7 @@ struct CheckRow: View {
             // Fixes all need sudo, so the app hands over the command instead of
             // running it. A menu-bar agent holding root is not worth the convenience.
             if let cmd = check.fixCommand {
-                Button(copied ? "已复制" : "复制命令") {
+                Button(copied ? L("components.copied") : L("components.copy.command")) {
                     onCopy(cmd)
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
@@ -355,7 +370,7 @@ struct CheckRow: View {
                 .font(.system(size: 10))
                 .foregroundStyle(copied ? Color.green : Color.secondary)
             } else if let url = check.settingsURL {
-                Button("前往") { onOpen(url) }
+                Button(L("components.open")) { onOpen(url) }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
                     .font(.system(size: 10))
@@ -368,6 +383,7 @@ struct CheckRow: View {
 // MARK: - Primary button
 
 struct PrimaryButton: View {
+    @ObservedObject private var language = LanguageStore.shared
     let title: String
     var symbol: String?
     var role: ButtonRole?
@@ -391,6 +407,7 @@ struct PrimaryButton: View {
 /// Small icon button. Uses .plain so it renders identically everywhere, including
 /// under ImageRenderer.
 struct IconButton: View {
+    @ObservedObject private var language = LanguageStore.shared
     let symbol: String
     var help: String = ""
     let action: () -> Void
@@ -416,6 +433,7 @@ struct IconButton: View {
 
 /// Text button that looks like a link but does not bridge to an AppKit control.
 struct LinkButton: View {
+    @ObservedObject private var language = LanguageStore.shared
     let title: String
     let action: () -> Void
 
@@ -433,7 +451,8 @@ struct LinkButton: View {
 /// Shown when an eject stopped, until the user dismisses it or ejects again.
 /// Without this the panel simply returned to normal and the click looked ignored.
 struct EjectFailureBanner: View {
-    let message: String
+    @ObservedObject private var language = LanguageStore.shared
+    let message: Message
     let onDismiss: () -> Void
 
     var body: some View {
@@ -444,7 +463,7 @@ struct EjectFailureBanner: View {
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("未能弹出")
+                Text(L("components.could.not.eject"))
                     .font(.system(size: 11.5, weight: .semibold))
                 Text(message)
                     .font(.system(size: 11))
@@ -471,6 +490,7 @@ struct EjectFailureBanner: View {
 }
 
 struct Divider1: View {
+    @ObservedObject private var language = LanguageStore.shared
     var body: some View {
         Rectangle().fill(.separator).frame(height: 1)
     }
@@ -483,6 +503,7 @@ struct Divider1: View {
 /// itself, because an ad-hoc signed build swapped in behind the user's back would
 /// just get blocked by Gatekeeper with no explanation.
 struct VersionFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     let version: String
     let update: Release?
     let onOpen: (URL) -> Void
@@ -499,7 +520,7 @@ struct VersionFooter: View {
                     onOpen(update.url)
                 } label: {
                     HStack(spacing: 3) {
-                        Text("有新版本 \(update.version.hasPrefix("v") ? String(update.version.dropFirst()) : update.version)")
+                        Text(L("components.version.available", update.version.hasPrefix("v") ? String(update.version.dropFirst()) : update.version))
                         Image(systemName: "arrow.down.circle")
                     }
                     .foregroundStyle(Color.accentColor)

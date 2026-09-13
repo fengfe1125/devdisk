@@ -7,6 +7,7 @@ import SwiftUI
 /// right density produced either a panel taller than the screen or one too sparse
 /// to be worth opening.
 struct ConnectedView: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     @AppStorage(PanelSetting.capacity)       private var showCapacity = true
@@ -41,7 +42,7 @@ struct ConnectedView: View {
         } else {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(store.lastError ?? "正在读取…")
+                Text(store.lastError?.text ?? L("connectedview.reading"))
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
@@ -63,9 +64,9 @@ struct ConnectedView: View {
 
     private var allHidden: some View {
         VStack(spacing: 6) {
-            Text("所有区块都已隐藏")
+            Text(L("connectedview.all.sections.are.hidden"))
                 .font(.system(size: 12, weight: .medium))
-            Text("在设置里选择要显示的内容（⌘,）")
+            Text(L("connectedview.choose.what.to.show.in.settings"))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
@@ -79,18 +80,18 @@ struct ConnectedView: View {
             CapacityBar(volume: snap.volume,
                         directories: store.directories,
                         loading: store.directoriesLoading)
-            if let issue = store.directoryIssue { Text("目录统计未完成：" + issue).font(.caption).foregroundStyle(.orange) }
+            if let issue = store.directoryIssue { Text(L("connectedview.folder.usage.incomplete") + issue).font(.caption).foregroundStyle(.orange) }
         }
     }
 
     // MARK: - Hardware & health
 
     @ViewBuilder private func hardware(_ snap: DiskSnapshot) -> some View {
-        PanelSection(title: "硬件与健康",
-                aside: snap.hardware.firmware.map { "固件 \($0)" }) {
+        PanelSection(title: L("connectedview.hardware.health"),
+                aside: snap.hardware.firmware.map { L("connectedview.firmware", $0) }) {
             VStack(spacing: 6) {
                 if let link = snap.hardware.linkDescription {
-                    KeyValueRow("接口", link)
+                    KeyValueRow(L("connectedview.interface"), link)
                 }
                 if let s = snap.hardware.smartStatus {
                     KeyValueRow("SMART") {
@@ -99,7 +100,7 @@ struct ConnectedView: View {
                 }
                 if let t = snap.hardware.trimSupported {
                     KeyValueRow("TRIM") {
-                        Pill(text: t ? "已启用" : "未启用", color: t ? .green : .orange)
+                        Pill(text: t ? L("connectedview.enabled") : L("connectedview.disabled"), color: t ? .green : .orange)
                     }
                 }
 
@@ -123,9 +124,9 @@ struct ConnectedView: View {
     }
 
     @ViewBuilder private func standardHealth(_ h: SmartHealth) -> some View {
-        if let w = h.bytesWritten { KeyValueRow("累计写入", Fmt.bytes(w)) }
+        if let w = h.bytesWritten { KeyValueRow(L("connectedview.total.written"), Fmt.bytes(w)) }
         if let life = h.lifeRemaining {
-            KeyValueRow("剩余寿命") {
+            KeyValueRow(L("connectedview.life.left")) {
                 HStack(spacing: 7) {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
@@ -140,9 +141,9 @@ struct ConnectedView: View {
                 }
             }
         }
-        if let hrs = h.powerOnHours { KeyValueRow("通电时间", Fmt.hours(hrs)) }
+        if let hrs = h.powerOnHours { KeyValueRow(L("connectedview.power.on.time"), Fmt.hours(hrs)) }
         if let temp = h.temperatureC {
-            KeyValueRow("温度") {
+            KeyValueRow(L("connectedview.temperature")) {
                 Text("\(temp) °C")
                     .font(.system(size: 11.5)).monospacedDigit()
                     .foregroundStyle(temp >= 70 ? Color.orange : Color.primary)
@@ -151,18 +152,18 @@ struct ConnectedView: View {
     }
 
     @ViewBuilder private func fullHealth(_ h: SmartHealth) -> some View {
-        if let r = h.bytesRead { KeyValueRow("累计读取", Fmt.bytes(r)) }
-        if let spare = h.availableSpare { KeyValueRow("可用备用块", "\(spare)%") }
-        if let c = h.powerCycles { KeyValueRow("通电次数", "\(c) 次") }
+        if let r = h.bytesRead { KeyValueRow(L("connectedview.total.read"), Fmt.bytes(r)) }
+        if let spare = h.availableSpare { KeyValueRow(L("connectedview.available.spare"), "\(spare)%") }
+        if let c = h.powerCycles { KeyValueRow(L("connectedview.power.cycles"), L("connectedview.", c)) }
         if let u = h.unsafeShutdowns {
-            KeyValueRow("非正常断电") {
-                Text("\(u) 次")
+            KeyValueRow(L("connectedview.unsafe.shutdowns")) {
+                Text(L("connectedview.", u))
                     .font(.system(size: 11.5)).monospacedDigit()
                     .foregroundStyle(h.allShutdownsUnsafe ? Color.orange : Color.primary)
             }
         }
         if let e = h.mediaErrors {
-            KeyValueRow("介质错误") {
+            KeyValueRow(L("connectedview.media.errors")) {
                 Text("\(e)")
                     .font(.system(size: 11.5)).monospacedDigit()
                     .foregroundStyle(e > 0 ? Color.red : Color.primary)
@@ -174,14 +175,14 @@ struct ConnectedView: View {
 
     private func volumeInfo(_ snap: DiskSnapshot) -> some View {
         let v = snap.volume
-        return PanelSection(title: "卷信息", aside: v.deviceIdentifier) {
+        return PanelSection(title: L("connectedview.volume.info"), aside: v.deviceIdentifier) {
             VStack(spacing: 6) {
-                KeyValueRow("挂载点", v.mountPoint)
-                KeyValueRow("文件系统", v.filesystem)
-                KeyValueRow("类型", v.isExternal ? "外置" : "内置")
-                if let p = v.physicalDisk { KeyValueRow("物理盘", "/dev/" + p) }
-                if let s = snap.hardware.serial { KeyValueRow("序列号", s) }
-                KeyValueRow("卷 UUID") {
+                KeyValueRow(L("connectedview.mount.point"), v.mountPoint)
+                KeyValueRow(L("connectedview.file.system"), v.filesystem)
+                KeyValueRow(L("connectedview.type"), v.isExternal ? L("connectedview.external") : L("connectedview.internal"))
+                if let p = v.physicalDisk { KeyValueRow(L("connectedview.physical.disk"), "/dev/" + p) }
+                if let s = snap.hardware.serial { KeyValueRow(L("connectedview.serial.number"), s) }
+                KeyValueRow(L("connectedview.volume.uuid")) {
                     Text(v.volumeUUID)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
@@ -196,8 +197,8 @@ struct ConnectedView: View {
 
     @ViewBuilder private func checks(_ snap: DiskSnapshot) -> some View {
         let warnings = snap.warningCount
-        PanelSection(title: "配置检查",
-                aside: warnings > 0 ? "\(warnings) 项需注意 / 未知" : "已完成检查正常",
+        PanelSection(title: L("connectedview.configuration"),
+                aside: warnings > 0 ? L("connectedview.needs.attention.unknown", warnings) : L("connectedview.completed.checks.passed"),
                 asideColor: warnings > 0 ? .orange : .green) {
             let problems = snap.checks.filter { $0.severity != .ok }
             let passing = snap.checks.filter { $0.severity == .ok }
@@ -223,7 +224,7 @@ struct ConnectedView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.green)
                             .frame(width: 14)
-                        Text(passing.map(\.title).joined(separator: "、"))
+                        Text(passing.map(\.title).joined(separator: M("list.separator")))
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -242,19 +243,19 @@ struct ConnectedView: View {
         let mine = report?.mine ?? []
         let system = report?.holders(.system) ?? []
 
-        PanelSection(title: "谁在使用",
-                aside: report?.scanDepth == .quick ? "可能相关 · 尚未核验" : "\(mine.count) 个你的进程 · 系统可见性受限") {
+        PanelSection(title: L("connectedview.what.s.using.the.drive"),
+                aside: report?.scanDepth == .quick ? L("connectedview.possible.matches.unverified") : L("connectedview.your.processes.limited.system.visibility", mine.count)) {
             VStack(spacing: 1) {
                 ForEach(mine) { h in
                     HStack(spacing: 8) {
-                        Text(h.name).lineLimit(1)
+                        Text(h.displayName).lineLimit(1)
                         Spacer(minLength: 6)
                         if let pid = h.pids.first {
                             Text(String(pid))
                                 .font(.system(size: 10.5)).monospacedDigit()
                                 .foregroundStyle(.tertiary)
                         }
-                        Text(report?.scanDepth == .quick ? "可能相关" : h.kind == .guiApp ? "需确认退出" : h.kind == .daemon ? "需确认停止" : "手动处理")
+                        Text(report?.scanDepth == .quick ? L("connectedview.possible.match") : h.kind == .guiApp ? L("connectedview.confirm.quit") : h.kind == .daemon ? L("connectedview.confirm.stop") : L("connectedview.handle.manually"))
                             .font(.system(size: 9.5, weight: .semibold))
                             .padding(.horizontal, 5).padding(.vertical, 1.5)
                             .background(
@@ -269,10 +270,10 @@ struct ConnectedView: View {
 
                 if !system.isEmpty {
                     HStack(spacing: 8) {
-                        Text(system.map(\.name).joined(separator: "、"))
+                        Text(system.map(\.name).joined(separator: L("list.separator")))
                             .lineLimit(1).foregroundStyle(.secondary)
                         Spacer(minLength: 6)
-                        Text("系统")
+                        Text(L("connectedview.system"))
                             .font(.system(size: 9.5, weight: .semibold))
                             .padding(.horizontal, 5).padding(.vertical, 1.5)
                             .background(Color.secondary.opacity(0.15),
@@ -284,28 +285,29 @@ struct ConnectedView: View {
                 }
 
                 if let report, !report.issues.isEmpty {
-                    Text(report.issues.joined(separator: "；")).font(.caption).foregroundStyle(.orange)
+                    Text(report.issues.joined(separator: M("issue.separator"))).font(.caption).foregroundStyle(.orange)
                 }
                 if mine.isEmpty && system.isEmpty {
-                    Text(report == nil || report?.state != .complete ? "占用状态未知" : report?.scanDepth == .quick ? "未发现候选进程，弹出前将完整预检" : "未发现当前用户的占用")
+                    Text(report == nil || report?.state != .complete ? L("connectedview.open.file.status.unknown") : report?.scanDepth == .quick ? L("connectedview.no.candidates.found.a.full.preflight.will.run") : L("connectedview.no.open.files.found.for.the.current.user"))
                         .font(.system(size: 11.5)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 3)
                 }
             }
 
-            LinkButton(title: "查看详情并重新检测…") { store.screen = .scan }
+            LinkButton(title: L("connectedview.view.details.and.scan.again")) { store.screen = .scan }
         }
     }
 }
 
 /// Pinned action area for the connected screen.
 struct ConnectedFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
         VStack(spacing: 7) {
-            PrimaryButton(title: "安全弹出", symbol: "eject.fill") { store.eject() }
+            PrimaryButton(title: L("connectedview.safely.eject"), symbol: "eject.fill") { store.eject() }
             Text(hint)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
@@ -317,6 +319,6 @@ struct ConnectedFooter: View {
     }
 
     private var hint: String {
-        "先只读预检；需要处理应用或服务时再确认"
+        L("connectedview.read.only.preflight.first.confirm.before.handling.apps")
     }
 }

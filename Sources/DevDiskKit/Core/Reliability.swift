@@ -6,25 +6,26 @@ struct ProbeResult<Value> {
     var value: Value?
     var state: ProbeState
     var collectedAt: Date = Date()
-    var issues: [String] = []
+    var issues: [Message] = []
     var isComplete: Bool { state == .complete }
 
     static func capture(_ body: () throws -> Value?) -> Self {
         do {
             guard let value = try body() else {
-                return .init(state: .unavailable, issues: ["输出无法解析"])
+                return .init(state: .unavailable, issues: [M("reliability.could.not.parse.output")])
             }
             return .init(value: value, state: .complete)
         } catch {
-            return .init(state: .unavailable, issues: [error.localizedDescription])
+            return .init(state: .unavailable, issues: [error.displayMessage])
         }
     }
 }
 
 struct ProbeFailure: Error, LocalizedError {
-    let message: String
-    init(_ message: String) { self.message = message }
-    var errorDescription: String? { message }
+    let message: Message
+    init(_ message: Message) { self.message = message }
+    init(_ raw: String) { self.message = .raw(raw) }
+    var errorDescription: String? { message.text }
 }
 
 /// A token belongs to one operation, never to a page or a reusable queue.
@@ -35,7 +36,7 @@ final class CancellationToken: @unchecked Sendable {
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     var isCommitted: Bool { lock.lock(); defer { lock.unlock() }; return committed }
     func cancel() { lock.lock(); defer { lock.unlock() }; if !committed { cancelled = true } }
-    func check() throws { if isCancelled { throw ProbeFailure("操作已中止") } }
+    func check() throws { if isCancelled { throw ProbeFailure(M("ejectflow.operation.cancelled")) } }
     /// Once the system eject is submitted, cancellation must not pretend to undo it.
     func commit() -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -53,10 +54,10 @@ struct VolumeIdentity: Hashable {
 }
 
 extension CommandResult {
-    func requireSuccess(_ tool: String) throws {
+    func requireSuccess(_ tool: Message) throws {
         guard ok else {
-            let reason = cancelled ? "已中止" : timedOut ? "超时" : "执行失败（\(exitCode)）"
-            throw ProbeFailure("\(tool) \(reason)" + (stderr.isEmpty ? "" : "：\(stderr.trimmingCharacters(in: .whitespacesAndNewlines))"))
+            let reason = cancelled ? M("reliability.cancelled") : timedOut ? M("reliability.timed.out") : M("reliability.failed.exit.code", exitCode)
+            throw ProbeFailure(tool + Message.raw(" ") + reason + (stderr.isEmpty ? "" : ": \(stderr.trimmingCharacters(in: .whitespacesAndNewlines))"))
         }
     }
 }

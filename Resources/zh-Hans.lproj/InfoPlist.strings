@@ -1,0 +1,1 @@
+"NSAppleEventsUsageDescription" = "DevDisk 需要请求 Android Studio、Xcode 等应用退出，以便安全弹出外置开发盘。它只发送「退出」指令，由应用自行处理未保存的内容。";

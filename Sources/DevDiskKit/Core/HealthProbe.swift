@@ -14,14 +14,15 @@ struct HealthProbe {
 
     enum Unavailable: Error, LocalizedError {
         case notInstalled
-        case unsupported(String)
+        case unsupported(Message)
 
-        var errorDescription: String? {
+        var errorDescription: String? { message.text }
+        var message: Message {
             switch self {
             case .notInstalled:
-                return "未安装 smartmontools（brew install smartmontools）"
+                return M("healthprobe.smartmontools.is.not.installed.brew.install.smartmontools")
             case .unsupported(let why):
-                return why.isEmpty ? "该硬盘盒不透传 SMART 日志" : why
+                return why == .raw("") ? M("healthprobe.this.enclosure.does.not.pass.through.smart.logs") : why
             }
         }
     }
@@ -36,10 +37,10 @@ struct HealthProbe {
         // opened or the command failed. Higher bits are health warnings and still
         // come with a valid payload, so they are not treated as failures here.
         if r.exitCode & 0b111 != 0 {
-            throw Unavailable.unsupported(Self.failureReason(r) ?? "")
+            throw Unavailable.unsupported(Self.failureReason(r).map(Message.raw) ?? "")
         }
         guard let h = Self.parse(r.stdout) else {
-            throw Unavailable.unsupported("smartctl 输出无法解析")
+            throw Unavailable.unsupported(M("healthprobe.could.not.parse.smartctl.output"))
         }
         return h
     }

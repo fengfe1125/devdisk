@@ -9,7 +9,7 @@ final class EjectFlowTests: XCTestCase {
     /// PPID line naming the parent shell.
     func testDissenterFromRealDiskutilOutput() throws {
         let out = try Fixture.text("eject_dissented", "txt")
-        let msg = EjectFlow.dissenterMessage(out)
+        let msg = EjectFlow.dissenterMessage(out)?.render(.chinese)
         XCTAssertEqual(msg, "被 tail（PID 12167）阻塞")
     }
 
@@ -17,7 +17,7 @@ final class EjectFlowTests: XCTestCase {
     /// the user after the wrong process.
     func testNeverReportsTheParentPPID() throws {
         let out = try Fixture.text("eject_dissented", "txt")
-        let msg = try XCTUnwrap(EjectFlow.dissenterMessage(out))
+        let msg = try XCTUnwrap(EjectFlow.dissenterMessage(out)?.render(.chinese))
         XCTAssertFalse(msg.contains("12165"), msg)
         XCTAssertFalse(msg.contains("zsh"), msg)
     }
@@ -25,17 +25,17 @@ final class EjectFlowTests: XCTestCase {
     /// The alternate form diskutil uses in other contexts.
     func testDissenterEqualsForm() {
         let msg = EjectFlow.dissenterMessage(
-            "Dissenter PID=1234 (Android Studio) status=0x0000c010 (kDAReturnBusy)")
+            "Dissenter PID=1234 (Android Studio) status=0x0000c010 (kDAReturnBusy)")?.render(.chinese)
         XCTAssertEqual(msg, "被 Android Studio（PID 1234）阻塞")
     }
 
     func testDissenterWithoutName() {
-        XCTAssertEqual(EjectFlow.dissenterMessage("Unmount was dissented by PID 99"),
+        XCTAssertEqual(EjectFlow.dissenterMessage("Unmount was dissented by PID 99")?.render(.chinese),
                        "被 PID 99 阻塞")
     }
 
     func testDissenterFallsBackToFirstLine() {
-        let msg = EjectFlow.dissenterMessage("\n  Unmount failed for /Volumes/Developer\n")
+        let msg = EjectFlow.dissenterMessage("\n  Unmount failed for /Volumes/Developer\n")?.render(.chinese)
         XCTAssertEqual(msg, "卸载失败：Unmount failed for /Volumes/Developer")
     }
 

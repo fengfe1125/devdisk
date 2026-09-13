@@ -8,6 +8,7 @@ import SwiftUI
 /// It reads the same `@AppStorage` keys as the Settings window, so the two stay in
 /// sync automatically.
 struct SettingsPanel: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
     @EnvironmentObject var updates: UpdateChecker
 
@@ -29,22 +30,24 @@ struct SettingsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PanelSection(title: "显示的区块") {
+            PanelSection(title: L("language.title")) { LanguagePicker() }
+            Divider1()
+            PanelSection(title: L("settingspanel.visible.sections")) {
                 VStack(alignment: .leading, spacing: 2) {
-                    row("容量", $capacity)
-                    subRow("展开「已用空间构成」", $breakdownOpen, enabled: capacity)
-                    row("硬件与健康", $hardware)
-                    row("配置检查", $checks)
-                    subRow("同时展开已通过的项", $checksAllRows, enabled: checks)
-                    row("谁在使用", $occupancy)
-                    row("卷信息", $volume)
-                    row("底部版本行", $version)
+                    row(L("settingspanel.capacity"), $capacity)
+                    subRow(L("settingspanel.expand.used.space.breakdown"), $breakdownOpen, enabled: capacity)
+                    row(L("connectedview.hardware.health"), $hardware)
+                    row(L("connectedview.configuration"), $checks)
+                    subRow(L("settingspanel.expand.passed.checks"), $checksAllRows, enabled: checks)
+                    row(L("connectedview.what.s.using.the.drive"), $occupancy)
+                    row(L("connectedview.volume.info"), $volume)
+                    row(L("settingspanel.version.footer"), $version)
                 }
             }
 
             Divider1()
 
-            PanelSection(title: "硬件与健康详细程度") {
+            PanelSection(title: L("settingspanel.hardware.health.detail")) {
                 VStack(alignment: .leading, spacing: 7) {
                     Picker("", selection: detail) {
                         ForEach(HardwareDetail.allCases) { d in
@@ -52,6 +55,7 @@ struct SettingsPanel: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                .id(language.resolved)
                     .labelsHidden()
                     .disabled(!hardware)
 
@@ -64,12 +68,12 @@ struct SettingsPanel: View {
 
             Divider1()
 
-            PanelSection(title: "监视的卷") {
+            PanelSection(title: L("settingspanel.monitored.volume")) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(store.pinnedMountPoint)
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
-                    Text("在设置窗口（⌘,）里可以修改。")
+                    Text(L("settingspanel.change.this.in.the.settings.window"))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.tertiary)
                 }
@@ -77,22 +81,22 @@ struct SettingsPanel: View {
 
             Divider1()
 
-            PanelSection(title: "更新") {
+            PanelSection(title: L("settingspanel.updates")) {
                 VStack(alignment: .leading, spacing: 6) {
-                    row("检查更新", $updateCheck)
+                    row(L("settingspanel.check.for.updates"), $updateCheck)
                     HStack(spacing: 6) {
-                        Text("当前 \(updates.currentVersion)")
+                        Text(L("settingspanel.current", updates.currentVersion))
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                         Spacer()
                         if updates.checking {
                             ProgressView().controlSize(.mini)
                         } else {
-                            LinkButton(title: "立即检查") { updates.checkNow() }
+                            LinkButton(title: L("settingspanel.check.now")) { updates.checkNow() }
                         }
                     }
                     if let r = updates.available {
-                        LinkButton(title: "有新版本 \(r.version)，前往下载") {
+                        LinkButton(title: L("settingspanel.version.available.download", r.version)) {
                             NSWorkspace.shared.open(r.url)
                         }
                     }
@@ -125,10 +129,11 @@ struct SettingsPanel: View {
 
 /// Pinned action area for the settings screen.
 struct SettingsFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
-        Button("完成") { store.screen = store.isMounted ? .connected : .disconnected }
+        Button(L("settingspanel.done")) { store.screen = store.isMounted ? .connected : .disconnected }
             .buttonStyle(.bordered)
             .controlSize(.large)
             .frame(maxWidth: .infinity)

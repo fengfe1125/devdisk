@@ -7,12 +7,13 @@ import SwiftUI
 /// as external, so without that filter every installer sitting in Downloads would
 /// show up here as if it were hardware.
 struct DrivePickerView: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PanelSection(title: "已连接的外置盘",
-                         aside: store.drives.isEmpty ? nil : "\(store.drives.count) 块") {
+            PanelSection(title: L("drivepickerview.connected.external.drives"),
+                         aside: store.drives.isEmpty ? nil : L("drivepickerview.", store.drives.count)) {
                 if store.drives.isEmpty {
                     empty
                 } else {
@@ -26,13 +27,13 @@ struct DrivePickerView: View {
 
             Divider1()
 
-            PanelSection(title: "默认盘") {
+            PanelSection(title: L("drivepickerview.default.drive")) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(store.pinnedMountPoint)
                         .font(.system(size: 11, design: .monospaced))
                         .textSelection(.enabled)
                         .lineLimit(1).truncationMode(.middle)
-                    Text("默认盘一插上就会自动切回它。其余时候显示当前接着的那块。")
+                    Text(L("drivepickerview.automatically.switches.back.when.the.default.drive.connects"))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -43,9 +44,9 @@ struct DrivePickerView: View {
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("没有检测到外置盘")
+            Text(L("drivepickerview.no.external.drives.found"))
                 .font(.system(size: 12, weight: .medium))
-            Text("挂载的磁盘映像与启动盘不计入。")
+            Text(L("drivepickerview.mounted.disk.images.and.the.startup.disk.are"))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
         }
@@ -87,7 +88,7 @@ struct DrivePickerView: View {
                 Spacer(minLength: 4)
 
                 if !isPinned {
-                    Button("设为默认") { store.pin(drive) }
+                    Button(L("drivepickerview.set.as.default")) { store.pin(drive) }
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
                         .font(.system(size: 10))
@@ -107,7 +108,7 @@ struct DrivePickerView: View {
     }
 
     private func subtitle(_ d: DiscoveredVolume) -> String {
-        [Fmt.bytes(d.freeBytes) + " 可用",
+        [Fmt.bytes(d.freeBytes) + L("drivepickerview.free"),
          d.filesystem,
          d.busProtocol,
          d.deviceIdentifier]
@@ -118,10 +119,11 @@ struct DrivePickerView: View {
 
 /// Pinned action area for the drive picker.
 struct DrivePickerFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
-        Button("刷新列表") { store.refresh() }
+        Button(L("drivepickerview.refresh.list")) { store.refresh() }
             .buttonStyle(.bordered)
             .controlSize(.large)
             .frame(maxWidth: .infinity)

@@ -54,7 +54,7 @@ struct Occupancy {
         try r.requireSuccess("ps")
         let parsed = Self.parsePs(r.text)
         guard !parsed.isEmpty, parsed.count == r.text.split(separator: "\n").count else {
-            throw ProbeFailure("ps 输出为空或无法完整解析")
+            throw ProbeFailure(M("occupancy.ps.output.is.empty.or.could.not.be"))
         }
         return parsed
     }
@@ -115,8 +115,9 @@ struct Occupancy {
                    pids: ps.map(\.pid).sorted(),
                    user: ps.first?.user ?? "",
                    kind: pat.kind,
-                   evidence: .inferred(reason: "可能相关，尚未验证文件占用"),
-                   bundleID: pat.bundleID)
+                   evidence: .inferred(reason: M("occupancy.possibly.related.open.files.have.not.been.verified")),
+                   bundleID: pat.bundleID,
+                   displayLabel: pat.match == "qemu-system" ? M("occupancy.android.emulator") : nil)
         }
         .sorted { $0.name < $1.name }
     }
@@ -129,7 +130,7 @@ struct Occupancy {
         let start = Date()
         // -F emits one field per line (p pid, c command, L login, n name), which is
         // far safer to parse than lsof's aligned columns.
-        var issues: [String] = []
+        var issues: [Message] = []
         let result = ProbeResult<CommandResult>.capture {
             try runner.run(Tool.lsof, ["-nP", "+w", "-F", "pcLn", "+D", mountPoint],
                            timeout: Deadline.scan)
@@ -139,10 +140,10 @@ struct Occupancy {
         if let r {
             let emptyMatch = r.exitCode == 1 && r.text.isEmpty && r.stderr.isEmpty
             if r.timedOut || r.cancelled || (!r.ok && !emptyMatch) || !r.stderr.isEmpty {
-                issues.append(r.cancelled ? "占用检测已中止" : r.timedOut ? "占用检测超时" : "占用检测未完成：" + r.stderr)
+                issues.append(r.cancelled ? M("occupancy.open.file.scan.cancelled") : r.timedOut ? M("occupancy.open.file.scan.timed.out") : M("occupancy.open.file.scan.incomplete") + r.stderr)
             }
             if !r.text.isEmpty && (sets.isEmpty || !Self.validLsof(r.text)) {
-                issues.append("lsof 输出无法完整解析")
+                issues.append(M("occupancy.lsof.output.could.not.be.fully.parsed"))
             }
         } else { issues += result.issues }
         // +D is authoritative for membership, but defend against prefix collisions
@@ -151,7 +152,7 @@ struct Occupancy {
         sets = sets.compactMap { set in
             var copy = set
             copy.files = set.files.filter { $0 == mountPoint || $0.hasPrefix(prefix) }
-            if copy.files.count != set.files.count { issues.append("部分文件路径无法确认属于目标卷") }
+            if copy.files.count != set.files.count { issues.append(M("occupancy.some.file.paths.could.not.be.verified.as")) }
             return copy.files.isEmpty ? nil : copy
         }
         let ps = ProbeResult<[ProcInfo]>.capture { try processes() }
@@ -162,7 +163,7 @@ struct Occupancy {
             let info = byPID[set.pid]
             var identity: ProcessIdentity?
             do { identity = try inspector.identity(set.pid) }
-            catch { issues.append(error.localizedDescription) }
+            catch { issues.append(error.displayMessage) }
             // A vanished/uninspectable holder remains manual; never treat it as a GUI app by name.
             let pat = info.flatMap(Self.classify)
             let mine = identity?.uid == getuid()
@@ -174,7 +175,9 @@ struct Occupancy {
             holders.append(Holder(name: identity?.appName ?? pat?.display ?? set.command,
                                   pids: [set.pid], user: set.user, kind: kind,
                                   evidence: .scanned(openFiles: set.files.count, sampleFiles: Array(set.files.prefix(3))),
-                                  bundleID: identity?.bundleID, identity: identity))
+                                  bundleID: identity?.bundleID, identity: identity,
+                                  displayLabel: identity?.appName == nil && pat?.match == "qemu-system"
+                                      ? M("occupancy.android.emulator") : nil))
         }
         holders.sort { ($0.openFileCount ?? 0) > ($1.openFileCount ?? 0) }
         holders += Self.inferredSystemHolders(indexingOn: indexingOn)
@@ -182,7 +185,7 @@ struct Occupancy {
                                duration: Date().timeIntervalSince(start),
                                openFilesFound: sets.reduce(0) { $0 + $1.files.count },
                                state: issues.isEmpty ? .complete : (sets.isEmpty ? .unavailable : .partial),
-                               issues: Array(Set(issues)).sorted())
+                               issues: issues.reduce(into: [Message]()) { if !$0.contains($1) { $0.append($1) } })
     }
 
     static func isAllowedDaemon(_ proc: ProcInfo, identity: ProcessIdentity) -> Bool {
@@ -246,12 +249,12 @@ struct Occupancy {
         if indexingOn == true {
             out.append(Holder(
                 name: "mds_stores", pids: [], user: "_mds_stores", kind: .system,
-                evidence: .inferred(reason: "本卷索引已启用，可能由 Spotlight 使用；非实时占用证据"),
+                evidence: .inferred(reason: M("occupancy.indexing.is.enabled.spotlight.may.use.this.volume")),
                 bundleID: nil))
         }
         out.append(Holder(
             name: "fseventsd", pids: [], user: "root", kind: .system,
-            evidence: .inferred(reason: "卷已挂载，系统通常使用文件系统事件服务；非实时占用证据"),
+            evidence: .inferred(reason: M("occupancy.the.volume.is.mounted.macos.usually.uses.file")),
             bundleID: nil))
 
         return out

@@ -27,8 +27,8 @@ final class ProbeReliabilityTests: XCTestCase {
         let runner = MockCommandRunner()
         runner.stub("tmutil isexcluded /Volumes/NoSuchReviewVolume", stdout: "[Included]")
         let check = ConfigProbe(runner: runner).checks(volume: volume(), health: nil).first { $0.id == "timemachine" }
-        XCTAssertEqual(check?.title, "此卷未被整卷排除")
-        XCTAssertTrue(check?.detail.contains("未验证备份") == true)
+        XCTAssertEqual(check?.title.render(.chinese), "此卷未被整卷排除")
+        XCTAssertTrue(check?.detail.render(.chinese).contains("未验证备份") == true)
     }
     func testExFATOwnershipIsNotApplicable() {
         var v = volume(); v.filesystem = "ExFAT"; v.ownersEnabled = false

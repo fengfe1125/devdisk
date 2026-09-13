@@ -27,10 +27,11 @@ enum CommandError: Error, LocalizedError {
     case notFound(String)
     case launchFailed(String, Error)
 
-    var errorDescription: String? {
+    var errorDescription: String? { message.text }
+    var message: Message {
         switch self {
-        case .notFound(let p):          return "找不到可执行文件：\(p)"
-        case .launchFailed(let p, let e): return "启动 \(p) 失败：\(e.localizedDescription)"
+        case .notFound(let p):          return M("shell.executable.not.found", p)
+        case .launchFailed(let p, let e): return M("shell.could.not.launch", p, e.displayMessage)
         }
     }
 }

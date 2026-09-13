@@ -30,8 +30,8 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
               isExternal: true, ownersEnabled: true, volumeUUID: "DEMO-ONLY", deviceIdentifier: drive.deviceIdentifier,
               containerReference: nil, physicalDisk: "disk900", totalBytes: drive.totalBytes, freeBytes: drive.freeBytes),
               hardware: .init(model: "演示数据 · 不操作真实设备"), health: nil,
-              healthUnavailableReason: "UI 验收专用模拟数据", checks: [
-                .init(id: "demo", severity: .unknown, title: "隔离演示模式", detail: "本窗口不会退出真实应用或弹出真实硬盘。", fixCommand: nil, settingsURL: nil)
+              healthUnavailableReason: M("demo.health"), checks: [
+                .init(id: "demo", severity: .unknown, title: M("demo.title"), detail: M("demo.detail"), fixCommand: nil, settingsURL: nil)
               ], directories: [], occupancy: nil)
     }
     func identity(_ pid: Int32) throws -> ProcessIdentity? { live[pid] }

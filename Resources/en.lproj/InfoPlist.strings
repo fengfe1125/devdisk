@@ -1,0 +1,1 @@
+"NSAppleEventsUsageDescription" = "DevDisk needs to ask apps such as Android Studio and Xcode to quit so it can safely eject the external development drive. It only sends a quit request; each app handles its unsaved work.";

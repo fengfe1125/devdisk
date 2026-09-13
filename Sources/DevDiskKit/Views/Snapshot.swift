@@ -30,7 +30,7 @@ public enum Snapshot {
         let runner = SystemCommandRunner()
         let flow = EjectFlow(runner: runner, mountPoint: mount)
         flow.onUpdate = { steps in
-            if let active = steps.first(where: { $0.state == .running }) { print(active.title) }
+            if let active = steps.first(where: { $0.state == .running }) { print(active.title.text) }
         }
         var outcome = flow.run(indexingOn: nil)
         while case .preview(let plan) = outcome {
@@ -41,7 +41,7 @@ public enum Snapshot {
                 holder.sampleFiles.forEach { print("  " + $0) }
             }
             plan.images.forEach { print("映像：\($0.path) · \($0.writable ? "需手动处理" : "只读")") }
-            plan.issues.forEach { print("检测不完整：" + $0) }
+            plan.issues.forEach { print(("检测不完整：" + $0).text) }
             guard isatty(STDIN_FILENO) == 1 else {
                 print("需要交互确认；未执行退出、停止或弹出操作。")
                 return false
@@ -63,7 +63,7 @@ public enum Snapshot {
         case .ejected(let t, let apps, let daemons):
             print("成功 · \(String(format: "%.1f", t)) 秒 · 应用 \(apps) · 服务进程 \(daemons)")
             return true
-        case .aborted(let why): print("中止：\(why)"); return false
+        case .aborted(let why): print("中止：\(why.text)"); return false
         case .preview: return false
         }
     }
@@ -95,6 +95,14 @@ public enum Snapshot {
     /// and signs cleanly can still die instantly on a user's machine.
     public static func selftest() -> Bool {
         var problems: [String] = []
+
+        for language in [AppLanguage.chinese, .english] {
+            let table = Localization.table(language)
+            if table["language.title"] == nil || table["ejectflow.operation.cancelled"] == nil
+                || Set(table.keys) != Set(Localization.table(.english).keys) {
+                problems.append("Missing or incomplete localization: " + language.rawValue)
+            }
+        }
 
         let missing = MenuBarIcon.missing
         if missing.isEmpty {
@@ -155,12 +163,12 @@ public enum Snapshot {
             let hardware = (try? vp.hardware(physicalDisk: volume.physicalDisk))
                 ?? DriveHardware()
             var health: SmartHealth?
-            var reason: String?
+            var reason: Message?
             do {
                 health = try HealthProbe(runner: runner).health(
                     physicalDisk: volume.physicalDisk)
             } catch {
-                reason = error.localizedDescription
+                reason = error.displayMessage
             }
             let indexing = try? cp.spotlightIndexing(mountPoint: mountPoint)
             let occ = try? Occupancy(runner: runner).fullScan(

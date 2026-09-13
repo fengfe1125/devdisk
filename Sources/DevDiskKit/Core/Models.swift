@@ -20,6 +20,7 @@ struct VolumeInfo {
     var freeBytes: Int64
     var encryptionKnown: Bool = true
     var ownershipKnown: Bool = true
+    var displayName: String { name.isEmpty ? L("volumeprobe.unnamed") : name }
     var usedBytes: Int64 { max(0, totalBytes - freeBytes) }
     var usedFraction: Double {
         totalBytes > 0 ? Double(usedBytes) / Double(totalBytes) : 0
@@ -93,8 +94,8 @@ enum CheckSeverity {
 struct ConfigCheck: Identifiable {
     let id: String
     var severity: CheckSeverity
-    var title: String
-    var detail: String
+    var title: Message
+    var detail: Message
     /// Shell command that fixes it, offered as copyable text — the app never runs sudo itself.
     var fixCommand: String?
     /// Opens a System Settings pane instead of copying a command.
@@ -114,7 +115,7 @@ enum HolderKind {
 /// so they are inferred from volume state rather than scanned — the UI says which.
 enum HolderEvidence: Equatable {
     case scanned(openFiles: Int, sampleFiles: [String])
-    case inferred(reason: String)
+    case inferred(reason: Message)
 }
 
 struct Holder: Identifiable, Equatable {
@@ -127,6 +128,8 @@ struct Holder: Identifiable, Equatable {
     /// Bundle identifier, present for GUI apps so AppleScript can address them.
     var bundleID: String?
     var identity: ProcessIdentity? = nil
+    var displayLabel: Message? = nil
+    var displayName: String { displayLabel?.text ?? name }
 
     var openFileCount: Int? {
         if case .scanned(let n, _) = evidence { return n }
@@ -136,7 +139,7 @@ struct Holder: Identifiable, Equatable {
         if case .scanned(_, let f) = evidence { return f }
         return []
     }
-    var inferenceReason: String? {
+    var inferenceReason: Message? {
         if case .inferred(let r) = evidence { return r }
         return nil
     }
@@ -152,18 +155,18 @@ struct OccupancyReport {
     /// volume, which is exactly why system holders are inferred separately.
     var openFilesFound: Int?
     var state: ProbeState = .complete
-    var issues: [String] = []
+    var issues: [Message] = []
 
     enum ScanDepth {
         case quick    // pgrep against a known list
         case full     // lsof +D over the volume
         case elevated // lsof as root via one-shot authorization
 
-        var label: String {
+        var label: Message {
             switch self {
-            case .quick:    return "快速检测 · 可能相关"
-            case .full:     return "完整检测"
-            case .elevated: return "管理员检测"
+            case .quick:    return M("models.quick.scan.possible.matches")
+            case .full:     return M("models.full.scan")
+            case .elevated: return M("models.administrator.scan")
             }
         }
     }
@@ -186,7 +189,7 @@ struct DiskSnapshot {
     var volume: VolumeInfo
     var hardware: DriveHardware
     var health: SmartHealth?
-    var healthUnavailableReason: String?
+    var healthUnavailableReason: Message?
     var checks: [ConfigCheck]
     var directories: [DirectoryUsage]
     var occupancy: OccupancyReport?
@@ -210,10 +213,11 @@ enum Fmt {
     static func count(_ n: Int) -> String {
         let f = NumberFormatter()
         f.numberStyle = .decimal
+        f.locale = LanguageStore.shared.resolved.locale
         return f.string(from: NSNumber(value: n)) ?? String(n)
     }
 
     static func hours(_ h: Int) -> String {
-        h < 48 ? "\(h) 小时" : "\(h) 小时（约 \(h / 24) 天）"
+        h < 48 ? L("models.hr", h) : L("models.hr.about.days", h, h / 24)
     }
 }

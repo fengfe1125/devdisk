@@ -18,13 +18,13 @@ final class DiskStore: ObservableObject {
     @Published var snapshot: DiskSnapshot?
     @Published var directories: [DirectoryUsage] = []
     @Published var directoriesLoading = false
-    @Published var directoryIssue: String?
+    @Published var directoryIssue: Message?
     @Published var occupancy: OccupancyReport?
     @Published var occupancyScanning = false
     @Published var ejectSteps: [EjectFlow.Step] = []
-    @Published var lastError: String?
-    @Published var ejectFailure: String?
-    @Published var lastEjectSummary: String?
+    @Published var lastError: Message?
+    @Published var ejectFailure: Message?
+    @Published var lastEjectSummary: Message?
     @Published var ejectPlan: EjectPlan?
     @Published var waitingForSystem = false
     @Published private var verifiedEjected: Screen?
@@ -136,7 +136,7 @@ final class DiskStore: ObservableObject {
                     ejectPlan = nil
                     operation = .finished
                     screen = .connected
-                    ejectFailure = "挂载状态已变化，原预览已失效，请重新检测"
+                    ejectFailure = M("diskstore.mount.state.changed.the.preview.is.no.longer")
                     refresh()
                 } else { cancelEject() }
             }
@@ -167,7 +167,7 @@ final class DiskStore: ObservableObject {
             Task { @MainActor in
                 guard let self, self.generation == g, !token.isCancelled, !self.operation.locksTarget else { return }
                 guard result.isComplete, let found = result.value else {
-                    self.lastError = "磁盘发现未完成：" + result.issues.joined(separator: "；")
+                    self.lastError = M("diskstore.disk.discovery.incomplete") + result.issues.joined(separator: M("issue.separator"))
                     self.finishRefresh()
                     return
                 }
@@ -260,13 +260,13 @@ final class DiskStore: ObservableObject {
                 case .success(let snap):
                     guard snap.volume.mountPoint == mount,
                           self.drives.first(where: { $0.mountPoint == mount }).map({ $0.volumeUUID == snap.volume.volumeUUID }) ?? false else {
-                        self.lastError = "探针返回了不同的卷，请重新检测"
+                        self.lastError = M("diskstore.the.probe.returned.a.different.volume.scan.again")
                         self.finishRefresh(); return
                     }
                     self.snapshot = snap; self.occupancy = snap.occupancy; self.lastError = nil
                     self.loadDirectories(g: g, id: id, mount: mount, token: token)
                 case .failure(let error):
-                    self.lastError = error.localizedDescription
+                    self.lastError = error.displayMessage
                     self.finishRefresh()
                 }
             }
@@ -289,7 +289,7 @@ final class DiskStore: ObservableObject {
                 self.directoriesLoading = false
                 if let value = result.value, result.isComplete {
                     self.directories = value; self.cache[id] = (self.now(), value); self.directoryIssue = nil
-                } else { self.directoryIssue = result.issues.joined(separator: "；") }
+                } else { self.directoryIssue = result.issues.joined(separator: M("issue.separator")) }
                 self.finishRefresh()
             }
         }
@@ -298,7 +298,7 @@ final class DiskStore: ObservableObject {
     nonisolated private static func probe(mount: String, runner: CommandRunner) -> Result<DiskSnapshot, Error> {
         Result {
             let vp = VolumeProbe(runner: runner)
-            guard let volume = try vp.volume(at: mount) else { throw ProbeFailure("无法读取目标卷") }
+            guard let volume = try vp.volume(at: mount) else { throw ProbeFailure(M("diskstore.could.not.read.the.target.volume")) }
             let hardware = (try? vp.hardware(physicalDisk: volume.physicalDisk)) ?? DriveHardware()
             let health = ProbeResult<SmartHealth>.capture { try HealthProbe(runner: runner).health(physicalDisk: volume.physicalDisk) }
             let cp = ConfigProbe(runner: runner)
@@ -307,7 +307,7 @@ final class DiskStore: ObservableObject {
             let occupancy = quick.value ?? OccupancyReport(holders: [], scanDepth: .quick, scannedAt: Date(), duration: 0,
                                                            openFilesFound: nil, state: .unavailable, issues: quick.issues)
             return DiskSnapshot(volume: volume, hardware: hardware, health: health.value,
-                healthUnavailableReason: health.issues.isEmpty ? nil : health.issues.joined(separator: "；"),
+                healthUnavailableReason: health.issues.isEmpty ? nil : health.issues.joined(separator: M("issue.separator")),
                 checks: cp.checks(volume: volume, health: health.value), directories: [], occupancy: occupancy)
         }
     }
@@ -342,7 +342,7 @@ final class DiskStore: ObservableObject {
         invalidateScans()
         operation = .preflight; screen = .ejecting
         ejectPlan = nil; ejectFailure = nil; lastError = nil; waitingForSystem = false
-        ejectSteps = [.init(id: "scan", title: "只读预检：确认目标与占用", state: .running)]
+        ejectSteps = [.init(id: "scan", title: M("diskstore.read.only.preflight.verify.target.and.open.files"), state: .running)]
         let token = CancellationToken()
         operationToken = token
         let mount = mountPoint, maker = makeFlow, runner = self.runner
@@ -392,7 +392,7 @@ final class DiskStore: ObservableObject {
         token.cancel()
         if operation == .awaitingConfirmation {
             operation = .finished; ejectPlan = nil; screen = .connected
-            ejectFailure = "已取消预览，未执行处理操作"
+            ejectFailure = M("diskstore.preview.cancelled.no.preparation.actions.were.performed")
             refresh()
         } else { operation = .cancelling }
     }
@@ -401,7 +401,7 @@ final class DiskStore: ObservableObject {
         if token.isCancelled {
             operation = .finished; screen = .connected; ejectPlan = nil
             if case .aborted(let why) = outcome { ejectFailure = why }
-            else { ejectFailure = "操作已中止；已发出的请求无法撤销" }
+            else { ejectFailure = M("diskstore.operation.cancelled.requests.already.sent.cannot.be.undone") }
             refresh(); return
         }
         switch outcome {
@@ -419,8 +419,8 @@ final class DiskStore: ObservableObject {
             refresh()
         }
     }
-    nonisolated static func summary(_ duration: TimeInterval, apps: Int, daemons: Int) -> String {
-        "耗时 \(String(format: "%.1f", duration)) 秒 · 确认退出 \(apps) 个应用、停止 \(daemons) 个服务进程"
+    nonisolated static func summary(_ duration: TimeInterval, apps: Int, daemons: Int) -> Message {
+        M("diskstore.time.s.apps.confirmed.quit.service.processes.stopped", Message.number(duration, decimals: 1), apps, daemons)
     }
     func dismissEjectFailure() { ejectFailure = nil }
     func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }

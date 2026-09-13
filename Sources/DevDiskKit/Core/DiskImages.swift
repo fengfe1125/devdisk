@@ -39,7 +39,7 @@ struct DiskImageProbe {
                                timeout: Deadline.quick)
         try r.requireSuccess("hdiutil")
         guard let root = VolumeProbe.plist(r.stdout), root["images"] is [[String: Any]] else {
-            throw ProbeFailure("hdiutil 输出无法解析")
+            throw ProbeFailure(M("diskimages.could.not.parse.hdiutil.output"))
         }
         return Self.parse(r.stdout, under: mountPoint)
     }

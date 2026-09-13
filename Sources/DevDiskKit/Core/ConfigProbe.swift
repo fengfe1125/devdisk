@@ -74,51 +74,51 @@ struct ConfigProbe {
 
         out.append(volume.isEncrypted
             ? ConfigCheck(id: "encryption", severity: .ok,
-                          title: "已加密",
-                          detail: "丢失或失窃时盘上内容不可读。",
+                          title: M("configprobe.encrypted"),
+                          detail: M("configprobe.contents.cannot.be.read.if.the.drive.is"),
                           fixCommand: nil, settingsURL: nil)
             : ConfigCheck(id: "encryption", severity: .critical,
-                          title: "未加密",
-                          detail: "随身携带的盘，含源码与签名凭据。丢失即全部泄露。",
+                          title: M("configprobe.not.encrypted"),
+                          detail: M("configprobe.this.portable.drive.contains.source.code.and.signing"),
                           fixCommand: nil,
                           settingsURL: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"))
 
-        func unknown(_ id: String, _ title: String, _ issues: [String]) -> ConfigCheck {
-            ConfigCheck(id: id, severity: .unknown, title: title + " · 未知",
-                        detail: issues.joined(separator: "；"), fixCommand: nil, settingsURL: nil)
+        func unknown(_ id: String, _ title: Message, _ issues: [Message]) -> ConfigCheck {
+            ConfigCheck(id: id, severity: .unknown, title: title + M("configprobe.unknown"),
+                        detail: issues.joined(separator: M("issue.separator")), fixCommand: nil, settingsURL: nil)
         }
         let backup = ProbeResult<Bool>.capture { try timeMachineExcluded(path: mount) }
         if let excluded = backup.value {
             out.append(ConfigCheck(id: "timemachine", severity: excluded ? .warning : .ok,
-                title: excluded ? "Time Machine 已排除整卷" : "此卷未被整卷排除",
-                detail: excluded ? "本卷不在 Time Machine 的备份范围内。" : "这里只检查整卷排除设置，未验证备份是否成功或子目录是否另行排除。",
+                title: excluded ? M("configprobe.excluded.from.time.machine") : M("configprobe.not.excluded.as.a.whole.volume"),
+                detail: excluded ? M("configprobe.time.machine.does.not.back.up.this.volume") : M("configprobe.checks.only.whole.volume.exclusion.not.backup.success"),
                 fixCommand: excluded ? "sudo tmutil removeexclusion \(shellQuote(mount))" : nil, settingsURL: nil))
         } else { out.append(unknown("timemachine", "Time Machine", backup.issues)) }
 
         let spotlight = ProbeResult<Bool>.capture { try spotlightIndexing(mountPoint: mount) }
         if let enabled = spotlight.value {
             out.append(ConfigCheck(id: "spotlight", severity: enabled ? .warning : .ok,
-                title: enabled ? "Spotlight 索引已启用" : "Spotlight 索引已关闭",
-                detail: enabled ? "构建缓存可能产生额外索引 IO；这不表示此刻正在索引。" : "此卷已关闭 Spotlight 索引。",
+                title: enabled ? M("configprobe.spotlight.indexing.enabled") : M("configprobe.spotlight.indexing.disabled"),
+                detail: enabled ? M("configprobe.build.caches.may.add.indexing.i.o.this") : M("configprobe.spotlight.indexing.is.disabled.for.this.volume"),
                 fixCommand: enabled ? "sudo mdutil -i off \(shellQuote(mount))" : nil, settingsURL: nil))
         } else { out.append(unknown("spotlight", "Spotlight", spotlight.issues)) }
 
         let sleep = ProbeResult<Int>.capture { try diskSleepMinutes() }
         if let minutes = sleep.value {
             out.append(ConfigCheck(id: "disksleep", severity: minutes > 0 ? .warning : .ok,
-                title: minutes > 0 ? "磁盘休眠 \(minutes) 分钟" : "磁盘休眠已关闭",
-                detail: "系统级休眠设置，实际行为取决于磁盘及硬盘盒。",
+                title: minutes > 0 ? M("configprobe.disk.sleep.after.min", minutes) : M("configprobe.disk.sleep.disabled"),
+                detail: M("configprobe.system.wide.setting.actual.behavior.depends.on.the"),
                 fixCommand: minutes > 0 ? "sudo pmset -a disksleep 0" : nil, settingsURL: nil))
-        } else { out.append(unknown("disksleep", "磁盘休眠", sleep.issues)) }
+        } else { out.append(unknown("disksleep", M("configprobe.disk.sleep"), sleep.issues)) }
 
         out.append(volume.ownersEnabled
             ? ConfigCheck(id: "owners", severity: .ok,
-                          title: "所有权已启用",
-                          detail: "文件权限与可执行位保持正确。",
+                          title: M("configprobe.ownership.enabled"),
+                          detail: M("configprobe.file.permissions.and.executable.bits.are.preserved"),
                           fixCommand: nil, settingsURL: nil)
             : ConfigCheck(id: "owners", severity: .critical,
-                          title: "所有权被忽略",
-                          detail: "权限与可执行位会被抹平，构建产物可能无法执行。",
+                          title: M("configprobe.ownership.ignored"),
+                          detail: M("configprobe.permissions.and.executable.bits.may.not.be.preserved"),
                           fixCommand: "sudo diskutil enableOwnership \(shellQuote(mount))",
                           settingsURL: nil))
 
@@ -126,18 +126,18 @@ struct ConfigProbe {
         let stale = staleResult.value ?? []
         out.append(stale.isEmpty
             ? ConfigCheck(id: "mountpoint", severity: .ok,
-                          title: "挂载点正常",
-                          detail: "\(mount)，无残留目录。",
+                          title: M("configprobe.mount.point.ok"),
+                          detail: M("configprobe.no.leftover.directories", mount),
                           fixCommand: nil, settingsURL: nil)
             : ConfigCheck(id: "mountpoint", severity: .warning,
-                          title: "存在残留挂载点",
-                          detail: "\(stale.joined(separator: "、")) 会让下次挂载改名。",
+                          title: M("configprobe.leftover.mount.points"),
+                          detail: M("configprobe.may.cause.a.different.mount.name.next.time", stale.map(Message.raw).joined(separator: M("list.separator"))),
                           fixCommand: stale.map { "sudo rmdir \(shellQuote($0))" }
                                            .joined(separator: "; "),
                           settingsURL: nil))
 
         if !staleResult.isComplete, let index = out.firstIndex(where: { $0.id == "mountpoint" }) {
-            out[index] = unknown("mountpoint", "残留挂载点", staleResult.issues)
+            out[index] = unknown("mountpoint", M("configprobe.leftover.mount.points.a66a"), staleResult.issues)
         }
 
         // Surfaced only when the counter says every power-off so far was unclean.
@@ -145,20 +145,20 @@ struct ConfigProbe {
            let u = h.unsafeShutdowns, let c = h.powerCycles {
             out.append(ConfigCheck(
                 id: "unsafe", severity: .warning,
-                title: "\(c) 次断电全部非正常",
-                detail: "非正常断电 \(u) 次。部分硬盘盒卸载时直接切电也会记这一笔。",
+                title: M("configprobe.all.shutdowns.were.unsafe", c),
+                detail: M("configprobe.unsafe.shutdowns.some.enclosures.also.record.this.when", u),
                 fixCommand: nil, settingsURL: nil))
         }
 
         if !volume.encryptionKnown, let i = out.firstIndex(where: { $0.id == "encryption" }) {
-            out[i] = unknown("encryption", "加密状态", ["设备未报告可识别的加密状态"])
+            out[i] = unknown("encryption", M("configprobe.encryption"), [M("configprobe.the.device.did.not.report.a.recognized.encryption")])
         }
         if let i = out.firstIndex(where: { $0.id == "owners" }) {
             if volume.filesystem.localizedCaseInsensitiveContains("exfat") || volume.filesystem.localizedCaseInsensitiveContains("fat32") {
-                out[i] = ConfigCheck(id: "owners", severity: .notApplicable, title: "卷所有权 · 不适用",
-                                     detail: "此文件系统不提供这项所有权设置。", fixCommand: nil, settingsURL: nil)
+                out[i] = ConfigCheck(id: "owners", severity: .notApplicable, title: M("configprobe.volume.ownership.not.applicable"),
+                                     detail: M("configprobe.this.file.system.does.not.support.this.ownership"), fixCommand: nil, settingsURL: nil)
             } else if !volume.ownershipKnown {
-                out[i] = unknown("owners", "卷所有权", ["设备未报告所有权设置"])
+                out[i] = unknown("owners", M("configprobe.volume.ownership"), [M("configprobe.the.device.did.not.report.its.ownership.setting")])
             }
         }
         return out

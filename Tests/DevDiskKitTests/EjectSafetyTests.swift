@@ -82,8 +82,8 @@ final class EjectSafetyTests: XCTestCase {
         let h = FlowHarness(); h.add(); h.stopWorks = false
         let f = h.flow, p = try f.prepare()
         guard case .aborted(let why) = f.execute(p, systemOnly: false) else { return XCTFail("must abort") }
-        XCTAssertTrue(why.contains("仍在运行"))
-        XCTAssertTrue(why.contains("停止服务进程 0"))
+        XCTAssertTrue(why.render(.chinese).contains("仍在运行"))
+        XCTAssertTrue(why.render(.chinese).contains("停止服务进程 0"))
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("diskutil eject") })
     }
     func testRefusedAppQuitNeverEscalates() throws {
@@ -174,19 +174,19 @@ final class EjectSafetyTests: XCTestCase {
     func testEjectSuccessWithoutVerificationDoesNotSaySafe() {
         let h = FlowHarness(); h.targetInspector.verifyError = true
         guard case .aborted(let why) = h.flow.run(indexingOn: nil) else { return XCTFail("must not claim safe") }
-        XCTAssertTrue(why.contains("未确认可拔线"))
+        XCTAssertTrue(why.render(.chinese).contains("未确认可拔线"))
     }
     func testEjectTimeoutWithDiskPresentIsUnknown() {
         let h = FlowHarness()
         h.failures["diskutil eject disk90"] = .init(stdout: Data(), stderr: "", exitCode: -1, timedOut: true)
         guard case .aborted(let why) = h.flow.run(indexingOn: nil) else { return XCTFail("unknown") }
-        XCTAssertTrue(why.contains("结果未知"))
+        XCTAssertTrue(why.render(.chinese).contains("结果未知"))
     }
     func testEjectRefusalReportsDissenter() throws {
         let h = FlowHarness()
         h.failures["diskutil eject disk90"] = .init(stdout: Data(), stderr: "Unmount was dissented by PID 12167 (/usr/bin/tail)", exitCode: 1)
         guard case .aborted(let why) = h.flow.run(indexingOn: nil) else { return XCTFail("refused") }
-        XCTAssertTrue(why.contains("tail"))
+        XCTAssertTrue(why.render(.chinese).contains("tail"))
     }
     func testGUIServiceImageAndDiskOrder() throws {
         let h = FlowHarness(); h.add(app: "review.editor"); h.add(pid: 456)

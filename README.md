@@ -56,6 +56,10 @@ If your development setup lives on an external drive, this probably sounds famil
 
 Simulators, builds that are still running, and anything it can't identify are left alone. DevDisk asks you to deal with them first.
 
+## Language
+
+Choose **Follow System**, **简体中文**, or **English** at the top of the panel settings or in the settings window (⌘,) under **General**. Changes apply immediately across open windows and are saved for next time. Follow System uses Simplified Chinese when your preferred system language is Chinese, and English otherwise. macOS controls the language of system permission dialogs.
+
 ## Install
 
 1. Download the zip from the [latest release](https://github.com/fengfe1125/devdisk/releases/latest) and unzip it.

@@ -5,7 +5,7 @@ struct EjectPlan: Equatable {
     let createdAt: Date
     let holders: [Holder]
     let images: [DiskImage]
-    let issues: [String]
+    let issues: [Message]
     var completedApps: Int = 0
     var completedDaemons: Int = 0
     var completedImages: Int = 0
@@ -26,13 +26,13 @@ struct EjectPlan: Equatable {
 // Configuration is frozen before dispatch; mutable execution state is owned by one queue.
 final class EjectFlow: @unchecked Sendable {
     enum StepState: Equatable {
-        case pending, running, done(String?), skipped(String), failed(String)
+        case pending, running, done(Message?), skipped(Message), failed(Message)
     }
     struct Step: Identifiable, Equatable {
         let id: String
-        let title: String
+        let title: Message
         var state: StepState = .pending
-        var detail: String? {
+        var detail: Message? {
             switch state {
             case .done(let d): return d
             case .skipped(let d), .failed(let d): return d
@@ -42,7 +42,7 @@ final class EjectFlow: @unchecked Sendable {
     }
     enum Outcome: Equatable {
         case ejected(TimeInterval, stoppedApps: Int, stoppedDaemons: Int)
-        case aborted(String)
+        case aborted(Message)
         case preview(EjectPlan)
     }
 
@@ -61,8 +61,8 @@ final class EjectFlow: @unchecked Sendable {
     private var stoppedApps = 0
     private var stoppedDaemons = 0
     private var detachedImages = 0
-    private var completedDetail: String {
-        "已退出应用 \(stoppedApps) 个、停止服务进程 \(stoppedDaemons) 个、推出映像 \(detachedImages) 个；已发出的请求无法撤销。"
+    private var completedDetail: Message {
+        M("ejectflow.apps.quit.service.processes.stopped.images.ejected.requests", stoppedApps, stoppedDaemons, detachedImages)
     }
     private var scoped: CommandRunner { ScopedCommandRunner(base: runner, cancellation: cancellation) }
 
@@ -77,7 +77,7 @@ final class EjectFlow: @unchecked Sendable {
         try cancellation.check()
         let target = try targets.target(at: mountPoint, runner: scoped)
         if let expectedVolume, target.volume.device != expectedVolume.device || target.volume.uuid != expectedVolume.uuid || target.volume.mount != expectedVolume.mount {
-            throw ProbeFailure("所选卷身份已变化，请重新选择")
+            throw ProbeFailure(M("ejectflow.the.selected.volume.s.identity.changed.select.it"))
         }
         var occ = Occupancy(runner: scoped)
         occ.inspector = inspector
@@ -90,7 +90,7 @@ final class EjectFlow: @unchecked Sendable {
         try cancellation.check()
         // A scan may take 30s; identity/topology must still match after it finishes.
         guard try targets.target(at: mountPoint, runner: scoped) == target else {
-            throw ProbeFailure("扫描期间目标盘或关联卷已变化，请重新检测")
+            throw ProbeFailure(M("ejectflow.the.target.drive.or.related.volumes.changed.during"))
         }
         return EjectPlan(target: target, createdAt: now(), holders: result.value?.holders ?? [],
                          images: images.value ?? [],
@@ -103,103 +103,103 @@ final class EjectFlow: @unchecked Sendable {
             let plan = try prepare(indexingOn: indexingOn)
             if plan.requiresConfirmation { return .preview(plan) }
             return execute(plan, systemOnly: false)
-        } catch { return .aborted(error.localizedDescription) }
+        } catch { return .aborted(error.displayMessage) }
     }
 
     func execute(_ approved: EjectPlan, systemOnly: Bool) -> Outcome {
         let started = now()
         stoppedApps = approved.completedApps; stoppedDaemons = approved.completedDaemons; detachedImages = approved.completedImages
-        steps = [Step(id: "validate", title: "确认目标及操作范围"),
-                 Step(id: "apps", title: "请求应用退出"), Step(id: "daemons", title: "停止限定后台服务"),
-                 Step(id: "images", title: "推出只读磁盘映像"), Step(id: "recheck", title: "复查占用"),
-                 Step(id: "unmount", title: "系统弹出"), Step(id: "verify", title: "核验弹出结果")]
+        steps = [Step(id: "validate", title: M("ejectflow.verify.target.and.scope")),
+                 Step(id: "apps", title: M("ejectflow.request.apps.to.quit")), Step(id: "daemons", title: M("ejectflow.stop.approved.background.services")),
+                 Step(id: "images", title: M("ejectflow.eject.read.only.disk.images")), Step(id: "recheck", title: M("ejectflow.recheck.open.files")),
+                 Step(id: "unmount", title: M("ejectflow.ask.macos.to.eject")), Step(id: "verify", title: M("ejectflow.verify.eject.result"))]
         emit()
         do {
             set("validate", .running)
             try cancellation.check()
             guard try targets.target(at: mountPoint, runner: scoped) == approved.target else {
-                throw ProbeFailure("目标身份或关联卷已变化，请重新检测")
+                throw ProbeFailure(M("ejectflow.the.target.s.identity.or.related.volumes.changed"))
             }
             if now().timeIntervalSince(approved.createdAt) > 30 {
                 return previewOutcome(try prepare())
             }
             if systemOnly {
-                guard approved.canSystemOnly else { throw ProbeFailure("此预检不允许跳过准备步骤") }
-                set("validate", .done("仅尝试普通系统弹出，不处理应用、服务或映像"))
-                for id in ["apps", "daemons", "images", "recheck"] { set(id, .skipped("由用户选择仅尝试系统弹出")) }
+                guard approved.canSystemOnly else { throw ProbeFailure(M("ejectflow.this.preflight.does.not.allow.preparation.to.be")) }
+                set("validate", .done(M("ejectflow.only.attempt.a.normal.system.eject.leave.apps")))
+                for id in ["apps", "daemons", "images", "recheck"] { set(id, .skipped(M("ejectflow.user.chose.to.attempt.system.eject.only"))) }
             } else {
                 let fresh = try prepare()
-                guard fresh.target == approved.target else { throw ProbeFailure("目标盘已变化") }
+                guard fresh.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
                 guard fresh.canPrepare, fresh.processScope.isSubset(of: approved.processScope),
                       fresh.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(fresh) }
-                set("validate", .done("操作范围已核验"))
+                set("validate", .done(M("ejectflow.operation.scope.verified")))
                 for (id, list) in [("apps", fresh.apps), ("daemons", fresh.daemons)] {
                     set(id, .running)
-                    if list.isEmpty { set(id, .skipped("没有需要处理的对象")); continue }
+                    if list.isEmpty { set(id, .skipped(M("ejectflow.nothing.needs.to.be.handled"))); continue }
                     for holder in list {
                         try cancellation.check()
                         // Recheck both file evidence and identity immediately before each action.
                         let current = try prepare()
-                        guard current.target == approved.target else { throw ProbeFailure("目标盘已变化") }
+                        guard current.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
                         guard current.canPrepare, current.processScope.isSubset(of: approved.processScope),
                               current.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(current) }
                         guard let identity = holder.identity,
                               current.holders.contains(where: { $0.identity == identity && $0.kind == holder.kind }) else { continue }
                         guard let live = try inspector.identity(identity.pid) else { continue }
-                        guard live == identity, live.uid == getuid() else { throw ProbeFailure("进程身份已变化，请重新检测") }
+                        guard live == identity, live.uid == getuid() else { throw ProbeFailure(M("ejectflow.process.identity.changed.scan.again")) }
                         try cancellation.check()
                         if id == "apps" {
                             try inspector.requestQuit(identity)
                         } else {
                             let r = try scoped.run(Tool.kill, ["-TERM", String(identity.pid)])
-                            try r.requireSuccess("停止服务")
+                            try r.requireSuccess(M("ejectflow.stop.service"))
                         }
                         set(id, .running)
                         try waitForExit(identity)
                         if id == "apps" { stoppedApps += 1 } else { stoppedDaemons += 1 }
                     }
-                    set(id, .done(id == "apps" ? "确认退出 \(stoppedApps) 个应用" : "确认停止 \(stoppedDaemons) 个进程"))
+                    set(id, .done(id == "apps" ? M("ejectflow.apps.confirmed.quit", stoppedApps) : M("ejectflow.processes.confirmed.stopped", stoppedDaemons)))
                 }
                 set("images", .running)
                 for image in fresh.images {
                     try cancellation.check()
                     let current = try prepare()
-                    guard current.target == approved.target else { throw ProbeFailure("目标盘已变化") }
+                    guard current.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
                     guard current.canPrepare, current.processScope.isSubset(of: approved.processScope),
                           current.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(current) }
                     guard current.images.contains(image) else { continue }
                     try cancellation.check()
-                    guard DiskImageProbe(runner: scoped).detach(image) else { throw ProbeFailure("无法推出映像 \(image.name)") }
+                    guard DiskImageProbe(runner: scoped).detach(image) else { throw ProbeFailure(M("ejectflow.could.not.eject.image", image.name)) }
                     detachedImages += 1
                 }
-                set("images", fresh.images.isEmpty ? .skipped("没有需要推出的映像") : .done("已推出 \(detachedImages) 个映像"))
+                set("images", fresh.images.isEmpty ? .skipped(M("ejectflow.no.images.to.eject")) : .done(M("ejectflow.images.ejected", detachedImages)))
                 set("recheck", .running)
                 let final = try prepare()
-                guard final.target == approved.target else { throw ProbeFailure("目标盘已变化") }
+                guard final.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
                 if final.requiresConfirmation { return previewOutcome(final) }
-                set("recheck", .done("未发现当前用户的占用；系统仍将检查是否允许弹出"))
+                set("recheck", .done(M("ejectflow.no.open.files.found.for.the.current.user")))
             }
             try cancellation.check()
             guard try targets.target(at: mountPoint, runner: scoped) == approved.target else {
-                throw ProbeFailure("弹出前目标身份或关联卷已变化")
+                throw ProbeFailure(M("ejectflow.the.target.s.identity.or.related.volumes.changed.e989"))
             }
-            guard cancellation.commit() else { throw ProbeFailure("操作已中止") }
+            guard cancellation.commit() else { throw ProbeFailure(M("ejectflow.operation.cancelled")) }
             onCommit()
             set("unmount", .running)
             let r = try runner.run(Tool.diskutil, ["eject", approved.target.physicalDisk], timeout: Deadline.eject)
             set("verify", .running)
             let gone = try targets.isEjected(approved.target, runner: runner)
             if gone && (r.ok || r.timedOut) {
-                set("unmount", .done(r.timedOut ? "系统命令超时，但已核验磁盘离线" : "系统已弹出"))
-                set("verify", .done("物理盘已离线，关联卷已卸载"))
+                set("unmount", .done(r.timedOut ? M("ejectflow.system.command.timed.out.but.the.disk.was") : M("ejectflow.macos.ejected.the.disk")))
+                set("verify", .done(M("ejectflow.physical.disk.offline.related.volumes.unmounted")))
                 return .ejected(now().timeIntervalSince(started), stoppedApps: stoppedApps, stoppedDaemons: stoppedDaemons)
             }
             if r.timedOut || r.ok {
-                throw ProbeFailure("弹出结果未知：尚未核验磁盘离线，请勿拔线，刷新后检查")
+                throw ProbeFailure(M("ejectflow.eject.result.unknown.disk.not.verified.offline.do"))
             }
-            throw ProbeFailure(Self.dissenterMessage(r.text + "\n" + r.stderr) ?? "系统拒绝弹出")
+            throw ProbeFailure(Self.dissenterMessage(r.text + "\n" + r.stderr) ?? M("ejectflow.macos.refused.to.eject.the.disk"))
         } catch {
-            let reason = cancellation.isCommitted ? "\(error.localizedDescription)；未确认可拔线。" : error.localizedDescription
+            let reason = cancellation.isCommitted ? M("ejectflow.it.is.not.confirmed.safe.to.unplug", error.displayMessage) : error.displayMessage
             for step in steps where step.state == .running { set(step.id, .failed(reason)) }
             return .aborted(reason + "\n" + completedDetail)
         }
@@ -221,11 +221,11 @@ final class EjectFlow: @unchecked Sendable {
             if live != expected { return } // the original instance ended; never signal its replacement
             sleep(0.1)
         }
-        throw ProbeFailure("\(expected.appName ?? "PID \(expected.pid)") 仍在运行；请处理保存对话框或手动停止后重试")
+        throw ProbeFailure(M("ejectflow.is.still.running.handle.any.save.dialog.or", expected.appName ?? "PID \(expected.pid)"))
     }
 
     static func secs(_ t: TimeInterval) -> String {
-        t < 1 ? String(format: "%.0f 毫秒", t * 1000) : String(format: "%.1f 秒", t)
+        t < 1 ? String(format: L("ejectflow.f.ms"), t * 1000) : String(format: L("ejectflow.f.s"), t)
     }
     // MARK: - Parsing
 
@@ -239,7 +239,7 @@ final class EjectFlow: @unchecked Sendable {
     /// "Dissenter parent PPID 12165 (/bin/zsh)" line cannot be mistaken for the
     /// culprit — reporting the parent shell instead of the real holder would send
     /// the user chasing the wrong process.
-    static func dissenterMessage(_ text: String) -> String? {
+    static func dissenterMessage(_ text: String) -> Message? {
         let patterns = [
             #"dissented by PID\s+(\d+)(?:\s*\(([^)]*)\))?"#,
             #"Dissenter PID=(\d+)(?:\s*\(([^)]*)\))?"#,
@@ -259,13 +259,13 @@ final class EjectFlow: @unchecked Sendable {
             guard let pid = group(1) else { continue }
             // The name often arrives as a full path (/usr/bin/tail).
             let name = group(2).map { ($0 as NSString).lastPathComponent }
-            return name.map { "被 \($0)（PID \(pid)）阻塞" } ?? "被 PID \(pid) 阻塞"
+            return name.map { M("ejectflow.blocked.by.pid", $0, pid) } ?? M("ejectflow.blocked.by.pid.7388", pid)
         }
 
         let line = text.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty }
-        return line.map { "卸载失败：\($0)" }
+        return line.map { M("ejectflow.unmount.failed", $0) }
     }
 
     // MARK: - Step bookkeeping

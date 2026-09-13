@@ -27,7 +27,7 @@ struct VolumeProbe {
         let cap = capacity(of: (d["MountPoint"] as? String) ?? mountPoint)
 
         return VolumeInfo(
-            name: d["VolumeName"] as? String ?? "(未命名)",
+            name: d["VolumeName"] as? String ?? "",
             mountPoint: d["MountPoint"] as? String ?? mountPoint,
             filesystem: d["FilesystemName"] as? String ?? "—",
             isEncrypted: d["Encryption"] as? Bool ?? false,
@@ -133,7 +133,7 @@ struct VolumeProbe {
         let r = try runner.run(Tool.du, ["-sk"] + visible.map { mountPoint + "/" + $0 },
                                timeout: Deadline.walk)
         try r.requireSuccess("du")
-        guard r.stderr.isEmpty else { throw ProbeFailure("目录统计不完整：" + r.stderr) }
+        guard r.stderr.isEmpty else { throw ProbeFailure(M("volumeprobe.folder.usage.incomplete") + r.stderr) }
         return Self.parseDu(r.text).sorted { $0.bytes > $1.bytes }
     }
 

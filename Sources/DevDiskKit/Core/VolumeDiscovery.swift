@@ -37,19 +37,19 @@ struct VolumeDiscovery {
 
     func result() -> ProbeResult<[DiscoveredVolume]> {
         var found: [DiscoveredVolume] = []
-        var issues: [String] = []
+        var issues: [Message] = []
         let paths: [String]
         do { paths = try MountTable.paths() }
-        catch { return .init(state: .unavailable, issues: [error.localizedDescription]) }
+        catch { return .init(state: .unavailable, issues: [error.displayMessage]) }
         for path in paths {
             do {
                 let r = try runner.run(Tool.diskutil, ["info", "-plist", path], timeout: Deadline.quick)
                 try r.requireSuccess("diskutil info")
                 guard let d = VolumeProbe.plist(r.stdout), let volume = Self.parse(d, fallbackMountPoint: path) else {
-                    throw ProbeFailure("卷信息无法解析")
+                    throw ProbeFailure(M("volumediscovery.could.not.parse.volume.information"))
                 }
                 if volume.isSelectableDrive { found.append(volume) }
-            } catch { issues.append(error.localizedDescription) }
+            } catch { issues.append(error.displayMessage) }
         }
         return .init(value: found.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
                      state: issues.isEmpty ? .complete : .partial, issues: issues)

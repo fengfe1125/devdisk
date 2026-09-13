@@ -99,6 +99,7 @@ enum MenuBarIcon {
 
 /// Menu bar label that prefers the bundled artwork and degrades to SF Symbols.
 struct MenuBarLabel: View {
+    @ObservedObject private var language = LanguageStore.shared
     let screen: DiskStore.Screen
     let mounted: Bool
     let hasWarnings: Bool

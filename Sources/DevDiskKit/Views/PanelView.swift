@@ -10,6 +10,7 @@ private struct ContentHeightKey: PreferenceKey {
 }
 
 struct PanelView: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
     @EnvironmentObject var updates: UpdateChecker
 
@@ -59,6 +60,8 @@ struct PanelView: View {
         // ScrollView. Reset it before measuring a new screen; otherwise a short
         // ejected/disconnected screen can spend one layout pass inside the old
         // long-screen height and leave the popover host window oversized.
+        .environment(\.locale, language.resolved.locale)
+        .onChange(of: language.resolved) { _, _ in contentHeight = 0 }
         .onChange(of: store.activeScreen) { _, _ in
             contentHeight = 0
         }
@@ -151,9 +154,9 @@ struct PanelView: View {
             // controls, which ImageRenderer cannot rasterize for the snapshot check.
             // Appearance is identical.
             if store.screen == .connected || store.screen == .scan {
-                IconButton(symbol: "arrow.clockwise", help: "刷新") { store.refresh(force: true) }
+                IconButton(symbol: "arrow.clockwise", help: L("panelview.refresh")) { store.refresh(force: true) }
             }
-            IconButton(symbol: "gearshape", help: "设置") {
+            IconButton(symbol: "gearshape", help: L("panelview.settings")) {
                 store.screen = store.screen == .settings
                     ? (store.isMounted ? .connected : .disconnected)
                     : .settings
@@ -162,12 +165,12 @@ struct PanelView: View {
             .disabled(store.operation.locksTarget)
 
             if presentation == .popover {
-                IconButton(symbol: "macwindow", help: "在窗口中打开") {
+                IconButton(symbol: "macwindow", help: L("panelview.open.in.window")) {
                     NSApp.activate(ignoringOtherApps: true)
                     openWindow(id: DiskStore.mainWindowID)
                 }
             }
-            IconButton(symbol: "power", help: "退出 DevDisk") { store.quit() }
+            IconButton(symbol: "power", help: L("panelview.quit.devdisk")) { store.quit() }
                 .disabled(store.operation.locksTarget)
         }
         .padding(.horizontal, UI.hPad)
@@ -195,7 +198,7 @@ struct PanelView: View {
     }
 
     private var title: String {
-        store.snapshot?.volume.name
+        store.snapshot?.volume.displayName
             ?? URL(fileURLWithPath: store.mountPoint).lastPathComponent
     }
 
@@ -208,19 +211,19 @@ struct PanelView: View {
     }
 
     private var subtitle: String {
-        if let e = store.lastError, store.screen == .connected { return e }
+        if let e = store.lastError, store.screen == .connected { return e.text }
         switch store.activeScreen {
-        case .ejecting:     return store.waitingForSystem ? "等待系统结果，请勿拔线" : "正在准备弹出…"
-        case .preview:      return "请核对弹出影响"
-        case .ejected:      return "已卸载 · 可安全拔线"
-        case .disconnected: return "未连接"
+        case .ejecting:     return store.waitingForSystem ? L("ejectingview.waiting.for.macos.do.not.unplug") : L("panelview.preparing.to.eject")
+        case .preview:      return L("panelview.review.the.eject.scope")
+        case .ejected:      return L("panelview.unmounted.safe.to.unplug")
+        case .disconnected: return L("panelview.disconnected")
         case .settings:
-            return "设置"
+            return L("panelview.settings")
         case .drives:
-            return store.drives.isEmpty ? "没有外置盘" : "选择要查看的盘"
+            return store.drives.isEmpty ? L("panelview.no.external.drives") : L("panelview.choose.a.drive")
         case .scan:
             let n = store.occupancy?.holders.count ?? 0
-            return "\(n) 个检测条目"
+            return L("panelview.scan.entries", n)
         case .connected:
             guard let s = store.snapshot else { return store.mountPoint }
             return [s.hardware.model, s.volume.filesystem]
@@ -232,6 +235,7 @@ struct PanelView: View {
 // MARK: - Blank states
 
 struct BlankState: View {
+    @ObservedObject private var language = LanguageStore.shared
     let symbol: String
     var symbolColor: Color = .secondary
     var symbolBackground: Color = .clear
@@ -269,20 +273,21 @@ struct BlankState: View {
 }
 
 struct DisconnectedView: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
         VStack(spacing: 0) {
             BlankState(
                 symbol: "externaldrive.badge.xmark",
-                title: "\(name) 未连接",
+                title: L("panelview.is.disconnected", name),
                 message: AnyView(
                     VStack(spacing: 3) {
-                        Text("插上后自动恢复。")
+                        Text(L("panelview.reconnect.it.to.resume.automatically"))
                         // The dangling ~/Library/Android/sdk symlink is the real trap:
                         // Studio may decide the SDK is missing and re-download it onto
                         // the internal disk.
-                        Text("此时请勿打开 Android Studio——它可能在内置盘重建 SDK。")
+                        Text(L("panelview.do.not.open.android.studio.now.it.may"))
                             .foregroundStyle(.orange)
                     }
                 )
@@ -298,12 +303,13 @@ struct DisconnectedView: View {
 /// Pinned footer for the disconnected screen — last eject result, or the path
 /// being watched.
 struct DisconnectedFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
         HStack {
             Spacer()
-            Text(store.lastEjectSummary.map { "上次弹出：\($0)" } ?? store.mountPoint)
+            Text(store.lastEjectSummary.map { L("panelview.last.eject", $0) } ?? store.mountPoint)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -313,6 +319,7 @@ struct DisconnectedFooter: View {
 }
 
 struct EjectedView: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
     let apps: Int
     let daemons: Int
@@ -323,10 +330,10 @@ struct EjectedView: View {
                 symbol: "checkmark.circle",
                 symbolColor: .green,
                 symbolBackground: .green,
-                title: "可以安全拔线",
+                title: L("panelview.safe.to.unplug"),
                 message: AnyView(
                     VStack(spacing: 3) {
-                        Text("物理盘已离线，关联卷已卸载。")
+                        Text(L("panelview.physical.disk.offline.related.volumes.unmounted"))
                         if let s = store.lastEjectSummary { Text(s) }
                     }
                 )
@@ -337,10 +344,11 @@ struct EjectedView: View {
 
 /// Pinned action area after a successful eject.
 struct EjectedFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
-        PrimaryButton(title: "好") { store.refresh(force: true) }
+        PrimaryButton(title: L("panelview.ok")) { store.refresh(force: true) }
             .padding(.horizontal, UI.hPad)
             .padding(.vertical, 11)
     }

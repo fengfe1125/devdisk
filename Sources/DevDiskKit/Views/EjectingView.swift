@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct EjectingView: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     private var doneCount: Int {
@@ -13,7 +14,7 @@ struct EjectingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PanelSection(title: store.operation == .preflight ? "正在只读预检" : store.operation == .cancelling ? "正在中止" : "正在安全弹出",
+            PanelSection(title: store.operation == .preflight ? L("ejectingview.running.read.only.preflight") : store.operation == .cancelling ? L("ejectingview.cancelling") : L("ejectingview.ejecting.safely"),
                     aside: "\(doneCount) / \(store.ejectSteps.count)") {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(store.ejectSteps) { StepRow(step: $0) }
@@ -25,11 +26,12 @@ struct EjectingView: View {
 
 /// Pinned action area while an eject is running.
 struct EjectingFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
         VStack(spacing: 7) {
-            Button("中止") {
+            Button(L("ejectingview.cancel")) {
                 store.cancelEject()
             }
             .disabled(!store.canCancel)
@@ -37,7 +39,7 @@ struct EjectingFooter: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity)
 
-            Text(store.waitingForSystem ? "等待系统结果，请勿拔线" : "中止将停止后续步骤；已发出的请求无法撤销")
+            Text(store.waitingForSystem ? L("ejectingview.waiting.for.macos.do.not.unplug") : L("ejectingview.cancelling.stops.subsequent.steps.requests.already.sent.cannot"))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
         }
@@ -47,6 +49,7 @@ struct EjectingFooter: View {
 }
 
 struct StepRow: View {
+    @ObservedObject private var language = LanguageStore.shared
     let step: EjectFlow.Step
 
     var body: some View {

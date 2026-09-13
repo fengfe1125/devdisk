@@ -39,17 +39,17 @@ enum HardwareDetail: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .basic:    return "基础"
-        case .standard: return "标准"
-        case .full:     return "全部"
+        case .basic:    return L("settings.basic")
+        case .standard: return L("settings.standard")
+        case .full:     return L("settings.all")
         }
     }
 
     var caption: String {
         switch self {
-        case .basic:    return "接口、SMART、TRIM"
-        case .standard: return "再加写入量、寿命、通电时间、温度"
-        case .full:     return "再加读取量、备用块、通电次数、非正常断电、介质错误"
+        case .basic:    return L("settings.interface.smart.trim")
+        case .standard: return L("settings.also.writes.life.left.power.on.time.and")
+        case .full:     return L("settings.also.reads.spare.blocks.power.cycles.unsafe.shutdowns")
         }
     }
 }

@@ -5,6 +5,7 @@ import SwiftUI
 /// users' handles — and the footer says so plainly, because "nobody is using it"
 /// followed by a failed eject is the worst outcome this screen could produce.
 struct ScanView: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
@@ -12,25 +13,25 @@ struct ScanView: View {
             subhead
             meta
             if let report = store.occupancy, !report.issues.isEmpty {
-                Text("检测不完整：" + report.issues.joined(separator: "；"))
+                Text(L("scanview.scan.incomplete") + report.issues.joined(separator: M("issue.separator")))
                     .font(.caption).foregroundStyle(.orange).padding(.horizontal, UI.hPad).padding(.bottom, 10)
             }
             Divider1()
 
             group(kind: .guiApp,
-                  title: "需要你决定", color: .orange,
-                  note: "弹出时会发送退出请求，由应用自己弹保存对话框。绝不强杀。")
+                  title: L("scanview.your.decision.needed"), color: .orange,
+                  note: L("scanview.eject.sends.a.quit.request.each.app.shows"))
 
             group(kind: .daemon,
-                  title: "确认后可停止", color: .secondary,
-                  note: "限定后台服务可能仍在工作；确认前不会发送停止请求。")
+                  title: L("scanview.can.stop.after.confirmation"), color: .secondary,
+                  note: L("scanview.approved.background.services.may.still.be.working.no"))
 
-            group(kind: .manual, title: "需手动处理", color: .orange,
-                  note: "模拟器、前台构建及无法确认身份的进程不会被自动停止。")
+            group(kind: .manual, title: L("ejectpreviewview.handle.manually"), color: .orange,
+                  note: L("scanview.emulators.foreground.builds.and.processes.with.unverified.identities"))
 
             group(kind: .system,
-                  title: "系统进程", color: .secondary,
-                  note: "不由本程序处理。diskutil eject 会让它们自行释放。")
+                  title: L("scanview.system.processes"), color: .secondary,
+                  note: L("scanview.devdisk.does.not.handle.these.diskutil.eject.asks"))
 
             permissionNote
         }
@@ -45,7 +46,7 @@ struct ScanView: View {
             } label: {
                 HStack(spacing: 3) {
                     Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
-                    Text("返回")
+                    Text(L("scanview.back"))
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(Color.accentColor)
@@ -53,7 +54,7 @@ struct ScanView: View {
             }
             .buttonStyle(.plain)
 
-            Text("谁在使用")
+            Text(L("connectedview.what.s.using.the.drive"))
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
 
@@ -65,10 +66,10 @@ struct ScanView: View {
                 if store.occupancyScanning {
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.mini)
-                        Text("检测中…")
+                        Text(L("scanview.scanning"))
                     }
                 } else {
-                    Text("重新检测")
+                    Text(L("ejectpreviewview.scan.again"))
                 }
             }
             .buttonStyle(.bordered)
@@ -92,8 +93,8 @@ struct ScanView: View {
                 if r.state == .complete, let n = r.openFilesFound {
                     Text("·")
                     Text(n == 0
-                         ? "未发现你的进程持有文件，用时 \(String(format: "%.1f", r.duration)) 秒"
-                         : "找到 \(Fmt.count(n)) 个打开的文件，用时 \(String(format: "%.1f", r.duration)) 秒")
+                         ? L("scanview.no.open.files.found.for.your.processes.s", Message.number(r.duration, decimals: 1))
+                         : L("scanview.open.files.found.s", n, Message.number(r.duration, decimals: 1)))
                 }
             }
             .font(.system(size: 10.5))
@@ -105,9 +106,9 @@ struct ScanView: View {
 
     static func relative(_ date: Date) -> String {
         let s = Int(Date().timeIntervalSince(date))
-        if s < 60 { return "\(max(0, s)) 秒前" }
-        if s < 3600 { return "\(s / 60) 分钟前" }
-        return "\(s / 3600) 小时前"
+        if s < 60 { return L("scanview.s.ago", max(0, s)) }
+        if s < 3600 { return L("scanview.min.ago", s / 60) }
+        return L("scanview.hr.ago", s / 3600)
     }
 
     // MARK: - Groups
@@ -123,7 +124,7 @@ struct ScanView: View {
                         .kerning(0.4)
                         .foregroundStyle(color)
                     Spacer()
-                    Text("\(holders.count) 个")
+                    Text(L("scanview.", holders.count))
                         .font(.system(size: 10.5)).foregroundStyle(.tertiary)
                 }
                 .padding(.bottom, 5)
@@ -154,9 +155,9 @@ struct ScanView: View {
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("普通权限只能看到你自己的进程。")
+                Text(L("scanview.standard.permissions.show.only.your.own.processes"))
                     .font(.system(size: 10.5, weight: .semibold))
-                Text("上面的系统进程是按「卷已挂载 + Spotlight 索引开启」推断的，不是扫出来的——lsof 看不见其他用户的文件句柄。")
+                Text(L("scanview.system.processes.above.are.inferred.from.the.mounted"))
                     .font(.system(size: 10.5))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -174,10 +175,11 @@ struct ScanView: View {
 
 /// Pinned action area for the detection screen.
 struct ScanFooter: View {
+    @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
-        PrimaryButton(title: "预检并弹出", symbol: "eject.fill") { store.eject() }
+        PrimaryButton(title: L("scanview.preflight.and.eject"), symbol: "eject.fill") { store.eject() }
             .padding(.horizontal, UI.hPad)
             .padding(.vertical, 11)
     }
@@ -186,6 +188,7 @@ struct ScanFooter: View {
 // MARK: - One holder
 
 struct HolderRow: View {
+    @ObservedObject private var language = LanguageStore.shared
     let holder: Holder
     @State private var expanded = false
 
@@ -199,7 +202,7 @@ struct HolderRow: View {
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                    Text(holder.name)
+                    Text(holder.displayName)
                         .fontWeight(.medium)
                         .lineLimit(1)
                     if !holder.pids.isEmpty || !holder.user.isEmpty {
@@ -232,7 +235,7 @@ struct HolderRow: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if let n = holder.openFileCount, n > holder.sampleFiles.count {
-                        Text("…另有 \(Fmt.count(n - holder.sampleFiles.count)) 个")
+                        Text(L("scanview.more", Fmt.count(n - holder.sampleFiles.count)))
                             .font(.system(size: 10)).foregroundStyle(.tertiary)
                     }
                     if let reason = holder.inferenceReason {
@@ -262,7 +265,7 @@ struct HolderRow: View {
     }
 
     private var trailing: String {
-        if let n = holder.openFileCount { return "\(Fmt.count(n)) 个文件" }
-        return holder.kind == .system ? "推断" : "可能相关"
+        if let n = holder.openFileCount { return L("scanview.files", n) }
+        return holder.kind == .system ? L("scanview.inferred") : L("connectedview.possible.match")
     }
 }

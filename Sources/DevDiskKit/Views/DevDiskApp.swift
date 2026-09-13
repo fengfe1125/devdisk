@@ -1,6 +1,7 @@
 import SwiftUI
 
 public struct DevDiskApp: App {
+    @ObservedObject private var language = LanguageStore.shared
     @NSApplicationDelegateAdaptor(DevDiskAppDelegate.self)
     private var appDelegate
 
@@ -27,7 +28,7 @@ public struct DevDiskApp: App {
         .commands {
             CommandGroup(after: .windowArrangement) {
                 if Bundle.main.object(forInfoDictionaryKey: "DevDiskDemoScenario") != nil {
-                    Button("验收：打开菜单栏面板") { appDelegate.statusBar.showPanel() }
+                    Button(L("devdiskapp.demo.open.menu.bar.panel")) { appDelegate.statusBar.showPanel() }
                 }
             }
         }
