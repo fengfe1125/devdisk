@@ -1,152 +1,87 @@
-<div align="center">
-<img src="docs/icon-128.png" width="128" alt="DevDisk">
+<p align="center">
+  <img src="docs/icon-128.png" width="112" height="112" alt="DevDisk app icon">
+</p>
 
-# DevDisk
+<h1 align="center">DevDisk</h1>
 
-macOS 菜单栏里的外置开发盘助手：查看状态、核对占用、按确认范围安全弹出。
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-A macOS menu bar app for external development drives: see what is holding the disk, then eject it safely.
+<p align="center">
+  <strong>Can't eject your external dev drive? DevDisk shows what's still using it, then ejects it safely.</strong><br>
+  A small macOS menu bar app for developers who keep Android SDKs, Gradle caches, or Xcode projects on an external drive.
+</p>
 
-</div>
+<p align="center">
+  <a href="https://github.com/fengfe1125/devdisk/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/fengfe1125/devdisk?display_name=tag&sort=semver&style=flat-square"></a>
+  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111111?style=flat-square&logo=apple">
+  <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-arm64-111111?style=flat-square">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-111111?style=flat-square"></a>
+</p>
 
-**为什么需要它**：Gradle daemon、Kotlin compile daemon、adb、Xcode 都会长期持有盘上的文件。强制推出或直接拔线会截断正在写入的构建缓存，事后表现为莫名其妙的构建失败——而且不会立刻报错，你会以为是代码问题。
+<p align="center">
+  <a href="https://github.com/fengfe1125/devdisk/releases/latest"><strong>Download the latest release</strong></a>
+</p>
 
-## 1.1.0：可信检测与弹出影响预览
+## The problem
 
-点击「安全弹出」先进行只读预检。没有需要处理的对象时，直接尝试普通系统弹出；需要退出应用、停止限定服务或推出只读映像时，先展示影响，再由你确认。
+If your development setup lives on an external drive, this probably sounds familiar:
 
-<img src="docs/preview-short-light.png" width="330" alt="弹出影响预览，演示数据">
+- **You click Eject, and macOS says no.** The disk is in use, but it's not obvious by what. The culprit is usually a background process — a Gradle or Kotlin daemon, or adb — still running long after you closed Android Studio. In Activity Monitor they show up as `java` or `adb`, so you'd never guess.
+- **So you force it, or pull the cable.** Everything looks fine. Then your next build fails with a strange error, because a cache file was cut off halfway through being written. It looks like a bug in your code, and you can waste a long time chasing it.
+- **Checking on the drive means a pile of Terminal commands.** How much space is left and what's using it, whether the drive is healthy, whether Time Machine or Spotlight is touching it.
 
-- 进程名称或命令行匹配只表示「可能相关」，不能据此退出应用。
-- 自动处理必须有目标卷上的文件占用证据，并验证 PID、用户、启动时间和可执行文件身份。
-- 检测超时、失败或不完整会明确显示；未知不会显示成正常或无人占用。
-- 切盘、重新检测和挂载变化使旧任务失效，旧结果不能覆盖新盘。
-- 「中止」会停止后续步骤，已经发出的退出或停止请求无法撤销。
-- 最终系统弹出提交后不再提供中止，必须等待并核验结果。未核验成功时不会提示可以拔线。
+## What DevDisk does
 
-## 安装与构建
+- **Shows the drive's status in your menu bar:** connected, needs attention, ejecting, or safe to unplug.
+- **Finds what's using the drive.** It lists the programs holding files on it, split into ones it can close for you and ones you'll need to close yourself.
+- **Ejects safely, in the right order.** After you confirm, it asks apps like Xcode and Android Studio to quit normally (they still ask you to save your work), stops the Gradle and Kotlin daemons and adb, ejects the drive, and checks that the drive is really gone before telling you it's safe to unplug.
+- **Gives the drive a checkup:** free space and what's taking it up, drive health (life left, temperature, unexpected power losses), encryption, and whether Time Machine, Spotlight, or disk sleep settings could cause trouble.
+- **Warns you about a common trap.** While the drive is unplugged, it reminds you not to open Android Studio — it may think your SDK is missing and download the whole thing again onto your Mac's internal disk.
 
-现有公开版本见 [GitHub Releases](https://github.com/fengfe1125/devdisk/releases)。本仓库版本号不代表该版本已经公开发布。
+<p align="center">
+  <img src="docs/preview-short-light.png" width="380" alt="DevDisk's eject preview: it lists what it will close and waits for confirmation (demo data)">
+  <br>
+  <sub>Before ejecting, DevDisk shows what it will close and waits for you to confirm. Demo data; the app's interface is in Chinese.</sub>
+</p>
 
-本版支持 macOS 14 及以上，打包脚本生成 Apple Silicon 应用：
+## What it will never do
 
-```bash
-swift test
-swift build
-./package.sh -    # 构建 build/DevDisk.app，不安装
-```
+- Force-quit your apps or services, or force-eject the drive.
+- Close something just because its name matches. It only acts on a program it can see holding files on this drive.
+- Tell you "nobody is using it" or "safe to unplug" without checking. If a check fails or times out, it tells you.
+- Touch system processes or other users' processes.
+- Ask for admin rights. When a system setting needs changing, it gives you a command to copy instead of running it for you.
 
-把生成的 App 放入 `/Applications` 即可使用。应用仍使用 ad-hoc 签名，未经 Apple 公证；系统可能阻止首次打开，需要按当前 macOS 的安全提示手动允许。
+Simulators, builds that are still running, and anything it can't identify are left alone. DevDisk asks you to deal with them first.
 
-可选安装 `smartmontools` 读取详细健康数据。没有安装、设备不支持或权限不足时，应用说明原因。DevDisk 不申请常驻管理员权限。
+## Install
+
+1. Download the zip from the [latest release](https://github.com/fengfe1125/devdisk/releases/latest) and unzip it.
+2. Drag `DevDisk.app` into your Applications folder.
+3. The first time you open it, macOS may block it, because the app isn't notarized by Apple. Go to **System Settings → Privacy & Security** and click **Open Anyway**.
+
+For more detailed drive health (life left, temperature, power-on hours), you can also install smartmontools. DevDisk works without it and tells you what's missing.
 
 ```bash
 brew install smartmontools
 ```
 
-## 弹出时会发生什么
+**Requirements:** macOS 14 or later on a Mac with Apple silicon. The app's interface is currently in Chinese.
 
-| 检测结果 | 行为 |
-|---|---|
-| 没有可见的准备操作 | 直接尝试普通 `diskutil eject`，由系统判断是否允许 |
-| 有可处理的占用对象 | 显示目标盘、操作对象、文件证据及影响，确认后处理 |
-| 检测不完整 | 重新检测、取消，或明确选择「仅尝试系统弹出」 |
-| 模拟器、前台构建、未知进程、可写或属性未知的映像 | 提示先手动处理，再重新检测 |
-| 同一物理盘有多个挂载卷 | 列出关联卷，只允许明确确认后的普通系统弹出，不自动清理进程 |
-| 目标身份变化、不是外置物理盘或拓扑无法确认 | 停止流程，交给用户检查 |
-
-「仅尝试系统弹出」不退出应用、不停止服务、不主动推出映像，不使用 force。检测不完整时，应用没有声称盘上无人占用。
-
-确认后的顺序：确认目标与操作范围 → 请求 GUI 应用退出 → 停止限定服务 → 推出只读映像 → 复查 → 系统弹出 → 核验磁盘离线。
-
-### 哪些对象允许代为处理
-
-- **GUI 应用**：必须映射到实际运行实例，并属于当前用户；通过 `NSRunningApplication.terminate()` 请求该实例退出。应用自行处理保存对话框；拒绝或仍在运行则停止，不升级为强杀。
-- **限定服务**：当前用户的 Gradle daemon、Kotlin daemon、adb server，有实际文件占用证据并确认后才收到 SIGTERM。发送成功不代表退出成功，必须等待进程结束。
-- **手动处理**：模拟器、Gradle 前台构建、未知进程以及无法可靠识别的对象，不会收到终止信号。限定服务也可能仍在工作，预览会提醒这一点。
-- **系统及其他用户进程**：不操作。推断条目与实际扫描证据分开展示。
-- **磁盘映像**：只读映像经确认后普通 detach；可写或读写属性未知的映像不自动 detach。
-
-预览超过 30 秒或目标挂载状态变化后需要重新核验。确认不授权新增对象；检测到新增占用或映像时返回更新后的预览，保留已完成操作的计数。
-
-## 检测能力与边界
-
-普通权限只能检查可见句柄，完整扫描完成也不表示看到了所有用户和系统服务。`lsof +D` 仍可能因为卷大、权限或文件系统异常而超时；上限为 30 秒。不完整结果可以用于解释问题，不能当作自动处理的完整依据。
-
-硬件信息主要面向 APFS／NVMe 开发盘，其他文件系统和硬盘盒可能只提供部分信息。多物理存储的 APFS、复杂存储拓扑及启动盘不进入自动清理流程。
-
-配置检查区分正常、异常、未知和不适用：
-
-- Time Machine 仅检查整卷排除状态，不证明备份配置有效、备份成功或每个子目录都已包含。
-- Spotlight「索引已启用」是设置状态，不表示此刻正在索引。
-- 磁盘休眠显示系统设置，实际行为取决于硬件。
-- ExFAT 的卷所有权检查显示不适用；缺失的属性显示未知。
-- 残留挂载点检查排除正在挂载的卷。
-
-配置修复仍只提供可复制命令，不由应用执行 sudo。SMART 和容量主要用于查看现状；健康历史与趋势提醒不在本版范围内。
-
-## 切盘、默认盘和刷新
-
-头部盘名可以切换目标。「设为默认」优先保存卷 UUID，盘重命名后仍能跟随。旧版本的 `targetMountPoint` 会在首次匹配真实外置卷时迁移，离线时保留等待匹配；显式更改设置路径会解除旧 UUID 绑定。路径尾随空格原样保留。
-
-没有 UUID 的卷只使用本次挂载会话中的设备身份。残留目录存在不等于盘已挂载。
-
-打开面板只做轻量刷新。目录统计仅在容量及「已用空间构成」展开时加载，成功结果缓存 5 分钟；点击刷新会使缓存失效。开始弹出前会取消并等待本应用的扫描结束，避免自己持有目标盘。
-
-菜单栏弹层和独立窗口共享一个操作状态。切换窗口不会创建第二条流程；预检、确认和执行期间锁定目标盘。
-
-## 设置与更新
-
-容量、硬件健康、配置检查、占用和卷信息各自可开关。硬件健康支持基础／标准／全部三档。面板齿轮及 `⌘,` 打开的设置窗口共享显示设置。
-
-应用每天最多检查一次 GitHub Releases，只提示下载链接，不自动替换自身。可在设置中关闭检查。
-
-## 实现结构
-
-- `ProbeResult<Value>`：保存采集状态、时间、数据和问题原因。
-- `VolumeIdentity` 与系统挂载表：区分卷身份、当前挂载路径和临时设备身份。
-- `DiskStore`：独立的页面与操作状态；generation 和取消令牌阻止过期结果回写，合并重复刷新。
-- `EjectPlan` / `EjectFlow`：只读预检形成确认范围，执行前重新核验，每个副作用前检查取消与身份。
-- `CommandRunner`：可注入命令结果；实际运行器使用有界非阻塞管道读取、硬超时及取消，避免遗留管道读取线程。
-
-GUI 应用与服务不会被强杀。命令运行器的超时回收只针对 DevDisk 自己启动的探针／命令子进程。
-
-## 验证与调试
-
-默认测试使用模拟磁盘、进程和命令结果，不弹出真实设备。测试涵盖解析、影响预览、PID 重用、取消、切盘竞态、命令回收、多卷及未知结果。
+## Build from source
 
 ```bash
 swift test
-./package.sh -
-build/DevDisk.app/Contents/MacOS/DevDisk --selftest
-.build/debug/DevDisk --snapshot-demo /tmp/devdisk-snapshots
+./package.sh -    # builds build/DevDisk.app without installing it
 ```
 
-`--snapshot-demo` 使用明确标注的演示数据，生成短／长预览、未知、执行中及等待系统结果的深浅色快照。真实弹层的锚点、滚动和固定操作区仍需打开 App 验收，快照不能代替。
+## More details
 
-两个额外集成测试需要显式启用：
+- [How DevDisk works](docs/how-it-works.md): the exact eject steps, what it can and can't detect, and how to test it.
+- [1.1.0 validation record](docs/validation-1.1.0.md) (in Chinese)
 
-```bash
-# 仅只读检查指定外置盘的拓扑，不扫描文件或弹出
-DEVDISK_READONLY_TARGET='/Volumes/你的开发盘' swift test \
-  --filter TargetTopologyTests.testReadOnlyRealTargetWhenExplicitlyConfigured
+## License
 
-# 创建唯一命名的临时磁盘映像，使用受控 tail 进程验证占用拒绝与成功弹出
-DEVDISK_SCRATCH_TEST=1 swift test --filter ScratchDiskTests
-```
-
-以下入口会执行真实弹出，只应用于你准备拔出的目标盘：
-
-```bash
-.build/debug/DevDisk --eject '/Volumes/你的开发盘'
-```
-
-CLI 与界面使用相同预检及处理规则。有影响时必须在交互终端输入确认；非交互环境返回非零，不绕过确认。没有准备操作时仍可直接尝试普通系统弹出。
-
-其他入口：`--snapshot <输出目录> [挂载点]` 读取真实探针渲染；`--check-update [版本号]` 检查真实 GitHub API。
-
-本次版本的验收记录见 [1.1.0 验收记录](docs/validation-1.1.0.md)。
-
-## 许可
-
-MIT
+[MIT](LICENSE)
