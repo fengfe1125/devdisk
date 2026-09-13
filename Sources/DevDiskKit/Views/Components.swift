@@ -43,6 +43,8 @@ extension CheckSeverity {
         case .ok:       return .green
         case .warning:  return .orange
         case .critical: return .red
+        case .unknown: return .orange
+        case .notApplicable: return .secondary
         }
     }
 
@@ -51,6 +53,8 @@ extension CheckSeverity {
         case .ok:       return "checkmark.circle"
         case .warning:  return "exclamationmark.triangle"
         case .critical: return "exclamationmark.circle"
+        case .unknown: return "questionmark.circle"
+        case .notApplicable: return "minus.circle"
         }
     }
 }

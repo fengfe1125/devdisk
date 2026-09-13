@@ -11,6 +11,10 @@ struct ScanView: View {
         VStack(alignment: .leading, spacing: 0) {
             subhead
             meta
+            if let report = store.occupancy, !report.issues.isEmpty {
+                Text("检测不完整：" + report.issues.joined(separator: "；"))
+                    .font(.caption).foregroundStyle(.orange).padding(.horizontal, UI.hPad).padding(.bottom, 10)
+            }
             Divider1()
 
             group(kind: .guiApp,
@@ -18,8 +22,11 @@ struct ScanView: View {
                   note: "弹出时会发送退出请求，由应用自己弹保存对话框。绝不强杀。")
 
             group(kind: .daemon,
-                  title: "会自动停止", color: .secondary,
-                  note: "开发守护进程，不持有未保存数据，下次构建自动重启。")
+                  title: "确认后可停止", color: .secondary,
+                  note: "限定后台服务可能仍在工作；确认前不会发送停止请求。")
+
+            group(kind: .manual, title: "需手动处理", color: .orange,
+                  note: "模拟器、前台构建及无法确认身份的进程不会被自动停止。")
 
             group(kind: .system,
                   title: "系统进程", color: .secondary,
@@ -82,7 +89,7 @@ struct ScanView: View {
                     .foregroundStyle(.secondary)
                 Text("·")
                 Text(Self.relative(r.scannedAt))
-                if let n = r.openFilesFound {
+                if r.state == .complete, let n = r.openFilesFound {
                     Text("·")
                     Text(n == 0
                          ? "未发现你的进程持有文件，用时 \(String(format: "%.1f", r.duration)) 秒"
@@ -170,7 +177,7 @@ struct ScanFooter: View {
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
-        PrimaryButton(title: "仍然安全弹出", symbol: "eject.fill") { store.eject() }
+        PrimaryButton(title: "预检并弹出", symbol: "eject.fill") { store.eject() }
             .padding(.horizontal, UI.hPad)
             .padding(.vertical, 11)
     }
@@ -256,6 +263,6 @@ struct HolderRow: View {
 
     private var trailing: String {
         if let n = holder.openFileCount { return "\(Fmt.count(n)) 个文件" }
-        return holder.kind == .system ? "推断" : "命令行匹配"
+        return holder.kind == .system ? "推断" : "可能相关"
     }
 }

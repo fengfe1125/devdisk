@@ -30,8 +30,21 @@ if CommandLine.arguments.contains("--check-update") {
 }
 
 if CommandLine.arguments.contains("--eject") {
-    MainActor.assumeIsolated { _ = Snapshot.runEject(arguments: CommandLine.arguments) }
-    exit(0)
+    let ok = MainActor.assumeIsolated { Snapshot.runEject(arguments: CommandLine.arguments) }
+    exit(ok ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--snapshot-demo") {
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    final class SnapshotFlag { var done = false; var ok = false }
+    let flag = SnapshotFlag()
+    Task { @MainActor in
+        flag.ok = await Snapshot.runDemo(arguments: CommandLine.arguments)
+        flag.done = true
+    }
+    let deadline = Date().addingTimeInterval(45)
+    while !flag.done && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    exit(flag.done && flag.ok ? 0 : 1)
 }
 
 if CommandLine.arguments.contains("--snapshot") {

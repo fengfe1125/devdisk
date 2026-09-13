@@ -10,6 +10,7 @@ import Foundation
 /// daemons are *inferred* from volume state and labelled as such in the UI.
 struct Occupancy {
     let runner: CommandRunner
+    var inspector: ProcessInspecting = SystemProcessInspector()
 
     init(runner: CommandRunner = SystemCommandRunner()) {
         self.runner = runner
@@ -33,10 +34,10 @@ struct Occupancy {
               kind: .guiApp, bundleID: "com.jetbrains.intellij"),
 
         .init(match: "GradleDaemon", display: "GradleDaemon", kind: .daemon, bundleID: nil),
-        .init(match: "GradleWrapperMain", display: "Gradle", kind: .daemon, bundleID: nil),
+        .init(match: "GradleWrapperMain", display: "Gradle", kind: .manual, bundleID: nil),
         .init(match: "KotlinCompileDaemon", display: "KotlinCompileDaemon",
               kind: .daemon, bundleID: nil),
-        .init(match: "qemu-system", display: "Android 模拟器", kind: .daemon, bundleID: nil),
+        .init(match: "qemu-system", display: "Android 模拟器", kind: .manual, bundleID: nil),
         .init(match: "platform-tools/adb", display: "adb", kind: .daemon, bundleID: nil),
     ]
 
@@ -50,7 +51,12 @@ struct Occupancy {
 
     func processes() throws -> [ProcInfo] {
         let r = try runner.run(Tool.ps, ["-axo", "pid=,user=,args="])
-        return Self.parsePs(r.text)
+        try r.requireSuccess("ps")
+        let parsed = Self.parsePs(r.text)
+        guard !parsed.isEmpty, parsed.count == r.text.split(separator: "\n").count else {
+            throw ProbeFailure("ps 输出为空或无法完整解析")
+        }
+        return parsed
     }
 
     /// Parses `ps -axo pid=,user=,args=`. Only pid and user are split off by
@@ -101,7 +107,7 @@ struct Occupancy {
             guard let pat = classify(p) else { continue }
             // A known binary that never references the volume is not holding it —
             // e.g. an Xcode session working entirely on the internal disk.
-            guard p.args.contains(mountPoint) || pat.kind == .guiApp else { continue }
+            guard p.args.contains(mountPoint + "/") || p.args.hasSuffix(mountPoint) else { continue }
             byName[pat.display, default: (pat, [])].1.append(p)
         }
         return byName.values.map { pat, ps in
@@ -109,7 +115,7 @@ struct Occupancy {
                    pids: ps.map(\.pid).sorted(),
                    user: ps.first?.user ?? "",
                    kind: pat.kind,
-                   evidence: .inferred(reason: "命令行匹配"),
+                   evidence: .inferred(reason: "可能相关，尚未验证文件占用"),
                    bundleID: pat.bundleID)
         }
         .sorted { $0.name < $1.name }
@@ -123,36 +129,82 @@ struct Occupancy {
         let start = Date()
         // -F emits one field per line (p pid, c command, L login, n name), which is
         // far safer to parse than lsof's aligned columns.
-        let r = try runner.run(Tool.lsof, ["-w", "-F", "pcLn", "+D", mountPoint],
-                               timeout: Deadline.scan)
-        let sets = Self.parseLsof(r.text)
-        let procs = try processes()
-        let byPID = Dictionary(uniqueKeysWithValues: procs.map { ($0.pid, $0) })
-
-        var holders: [Holder] = sets.map { set in
-            let info = byPID[set.pid]
-            let pat = info.flatMap(Self.classify)
-            return Holder(
-                name: pat?.display ?? set.command,
-                pids: [set.pid],
-                user: set.user.isEmpty ? (info?.user ?? "") : set.user,
-                // An unrecognised process gets .guiApp so the flow asks rather than
-                // kills — never guess that an unknown process is safe to terminate.
-                kind: pat?.kind ?? .guiApp,
-                evidence: .scanned(openFiles: set.files.count,
-                                   sampleFiles: Array(set.files.prefix(3))),
-                bundleID: pat?.bundleID
-            )
+        var issues: [String] = []
+        let result = ProbeResult<CommandResult>.capture {
+            try runner.run(Tool.lsof, ["-nP", "+w", "-F", "pcLn", "+D", mountPoint],
+                           timeout: Deadline.scan)
         }
-        .sorted { ($0.openFileCount ?? 0) > ($1.openFileCount ?? 0) }
-
+        let r = result.value
+        var sets = Self.parseLsof(r?.text ?? "")
+        if let r {
+            let emptyMatch = r.exitCode == 1 && r.text.isEmpty && r.stderr.isEmpty
+            if r.timedOut || r.cancelled || (!r.ok && !emptyMatch) || !r.stderr.isEmpty {
+                issues.append(r.cancelled ? "占用检测已中止" : r.timedOut ? "占用检测超时" : "占用检测未完成：" + r.stderr)
+            }
+            if !r.text.isEmpty && (sets.isEmpty || !Self.validLsof(r.text)) {
+                issues.append("lsof 输出无法完整解析")
+            }
+        } else { issues += result.issues }
+        // +D is authoritative for membership, but defend against prefix collisions
+        // and escaped/ambiguous path output rather than inventing a relationship.
+        let prefix = mountPoint.hasSuffix("/") ? mountPoint : mountPoint + "/"
+        sets = sets.compactMap { set in
+            var copy = set
+            copy.files = set.files.filter { $0 == mountPoint || $0.hasPrefix(prefix) }
+            if copy.files.count != set.files.count { issues.append("部分文件路径无法确认属于目标卷") }
+            return copy.files.isEmpty ? nil : copy
+        }
+        let ps = ProbeResult<[ProcInfo]>.capture { try processes() }
+        if !ps.isComplete { issues += ps.issues }
+        let byPID = Dictionary((ps.value ?? []).map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
+        var holders: [Holder] = []
+        for set in sets {
+            let info = byPID[set.pid]
+            var identity: ProcessIdentity?
+            do { identity = try inspector.identity(set.pid) }
+            catch { issues.append(error.localizedDescription) }
+            // A vanished/uninspectable holder remains manual; never treat it as a GUI app by name.
+            let pat = info.flatMap(Self.classify)
+            let mine = identity?.uid == getuid()
+            let kind: HolderKind
+            if identity != nil, !mine { kind = .system }
+            else if mine, identity?.bundleID != nil { kind = .guiApp }
+            else if mine, let info, let identity, Self.isAllowedDaemon(info, identity: identity) { kind = .daemon }
+            else { kind = .manual }
+            holders.append(Holder(name: identity?.appName ?? pat?.display ?? set.command,
+                                  pids: [set.pid], user: set.user, kind: kind,
+                                  evidence: .scanned(openFiles: set.files.count, sampleFiles: Array(set.files.prefix(3))),
+                                  bundleID: identity?.bundleID, identity: identity))
+        }
+        holders.sort { ($0.openFileCount ?? 0) > ($1.openFileCount ?? 0) }
         holders += Self.inferredSystemHolders(indexingOn: indexingOn)
+        return OccupancyReport(holders: holders, scanDepth: .full, scannedAt: start,
+                               duration: Date().timeIntervalSince(start),
+                               openFilesFound: sets.reduce(0) { $0 + $1.files.count },
+                               state: issues.isEmpty ? .complete : (sets.isEmpty ? .unavailable : .partial),
+                               issues: Array(Set(issues)).sorted())
+    }
 
-        return OccupancyReport(
-            holders: holders, scanDepth: .full, scannedAt: start,
-            duration: Date().timeIntervalSince(start),
-            openFilesFound: sets.reduce(0) { $0 + $1.files.count }
-        )
+    static func isAllowedDaemon(_ proc: ProcInfo, identity: ProcessIdentity) -> Bool {
+        let executable = (identity.executable as NSString).lastPathComponent
+        let tokens = proc.args.split(whereSeparator: \.isWhitespace).map(String.init)
+        if executable == "java" {
+            return tokens.contains("org.gradle.launcher.daemon.bootstrap.GradleDaemon")
+                || tokens.contains("org.jetbrains.kotlin.daemon.KotlinCompileDaemon")
+        }
+        return executable == "adb" && tokens.contains("fork-server") && tokens.contains("server")
+    }
+
+    static func validLsof(_ text: String) -> Bool {
+        var hasProcess = false
+        for line in text.split(separator: "\n") {
+            guard let tag = line.first else { continue }
+            if tag == "p" {
+                guard let pid = Int32(line.dropFirst()), pid > 0 else { return false }
+                hasProcess = true
+            } else if !hasProcess || !"cLn".contains(tag) { return false }
+        }
+        return hasProcess
     }
 
     struct LsofSet {
@@ -194,12 +246,12 @@ struct Occupancy {
         if indexingOn == true {
             out.append(Holder(
                 name: "mds_stores", pids: [], user: "_mds_stores", kind: .system,
-                evidence: .inferred(reason: "本卷 Spotlight 索引开启，正在写 .Spotlight-V100"),
+                evidence: .inferred(reason: "本卷索引已启用，可能由 Spotlight 使用；非实时占用证据"),
                 bundleID: nil))
         }
         out.append(Holder(
             name: "fseventsd", pids: [], user: "root", kind: .system,
-            evidence: .inferred(reason: "任何已挂载的卷都会被它持有，写 .fseventsd"),
+            evidence: .inferred(reason: "卷已挂载，系统通常使用文件系统事件服务；非实时占用证据"),
             bundleID: nil))
 
         return out

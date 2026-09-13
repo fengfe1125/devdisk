@@ -2,324 +2,429 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Owns all app state and keeps the probes off the main thread. Volume arrival and
-/// departure come from NSWorkspace notifications rather than polling, so an unplugged
-/// drive is noticed immediately without the app touching the disk on a timer.
 @MainActor
 final class DiskStore: ObservableObject {
-
     enum Screen: Equatable {
-        case connected
-        case scan
-        case settings
-        case drives
-        case ejecting
+        case connected, scan, settings, drives, preview, ejecting
         case ejected(TimeInterval, apps: Int, daemons: Int)
         case disconnected
     }
-
+    enum Operation: Equatable {
+        case idle, preflight, awaitingConfirmation, executing, cancelling, finished
+        var locksTarget: Bool { self == .preflight || self == .awaitingConfirmation || self == .executing || self == .cancelling }
+    }
     @Published var screen: Screen = .disconnected
+    @Published private(set) var operation: Operation = .idle
     @Published var snapshot: DiskSnapshot?
     @Published var directories: [DirectoryUsage] = []
     @Published var directoriesLoading = false
+    @Published var directoryIssue: String?
     @Published var occupancy: OccupancyReport?
     @Published var occupancyScanning = false
     @Published var ejectSteps: [EjectFlow.Step] = []
     @Published var lastError: String?
-    /// Why the last eject stopped. Kept separate from `lastError` because the
-    /// abort path calls `refresh()`, and a successful refresh clears `lastError` —
-    /// which wiped the explanation before the user could read it, so the panel just
-    /// snapped back to normal and the eject looked like it did nothing at all.
     @Published var ejectFailure: String?
     @Published var lastEjectSummary: String?
-
-    /// The volume the user cares about. It wins whenever it is attached, so
-    /// plugging the dev drive back in returns to it.
-    @AppStorage("targetMountPoint") var pinnedMountPoint: String = "/Volumes/Developer"
-
-    /// The volume currently on screen. Follows the pinned one when that is attached,
-    /// otherwise falls back to whatever external drive is actually there — the panel
-    /// used to sit blank on "未连接" while a camera card was mounted the whole time.
-    @Published var mountPoint: String = ""
-
-    /// External drives found attached, refreshed with every probe.
+    @Published var ejectPlan: EjectPlan?
+    @Published var waitingForSystem = false
+    @Published private var verifiedEjected: Screen?
+    @Published var mountPoint = ""
     @Published var drives: [DiscoveredVolume] = []
+    @Published private(set) var mounted = false
 
     private let runner: CommandRunner
+    private let defaults: UserDefaults
     private let work = DispatchQueue(label: "devdisk.probe", qos: .userInitiated)
-    /// Eject gets its own queue. Sharing the probe queue meant an eject could sit
-    /// behind a `du -sk` walk of the whole volume (seconds), so the panel switched
-    /// to "正在安全弹出" and then showed 0/5 with nothing moving.
     private let ejectQueue = DispatchQueue(label: "devdisk.eject", qos: .userInitiated)
     private var observers: [NSObjectProtocol] = []
+    private var settingsObserver: NSObjectProtocol?
+    private var generation = 0
+    private var session = UUID()
+    private var selectedIdentity: VolumeIdentity?
+    private var scanToken = CancellationToken()
+    private var operationToken: CancellationToken?
+    private var refreshActive = false
+    private var pendingRefresh = false
+    private var cache: [VolumeIdentity: (Date, [DirectoryUsage])] = [:]
+    private var lastDirectoryVisible = false
 
-    init(runner: CommandRunner = SystemCommandRunner()) {
+    // Injectable boundaries make task races testable without a real disk or process.
+    var discover: (CommandRunner) -> ProbeResult<[DiscoveredVolume]> = { runner in
+        VolumeDiscovery(runner: runner).result()
+    }
+    var probeVolume: (String, CommandRunner) -> Result<DiskSnapshot, Error> = DiskStore.probe
+    var directoryUsage: (String, CommandRunner) throws -> [DirectoryUsage] = { mount, runner in
+        try VolumeProbe(runner: runner).directoryUsage(mountPoint: mount)
+    }
+    var makeFlow: (CommandRunner, String, CancellationToken) -> EjectFlow = {
+        EjectFlow(runner: $0, mountPoint: $1, cancellation: $2)
+    }
+    var now: () -> Date = Date.init
+
+    var pinnedMountPoint: String {
+        get { defaults.string(forKey: "targetMountPoint") ?? "/Volumes/Developer" }
+        set {
+            guard !operation.locksTarget else { return }
+            defaults.removeObject(forKey: "targetVolumeUUID")
+            defaults.set(newValue, forKey: "targetMountPoint")
+        }
+    }
+    var isMounted: Bool { mounted }
+    var canCancel: Bool { operation.locksTarget && !waitingForSystem && operationToken?.isCommitted != true }
+    var statusScreen: Screen {
+        operation.locksTarget ? activeScreen : verifiedEjected ?? (mounted ? .connected : .disconnected)
+    }
+    var activeScreen: Screen {
+        switch operation {
+        case .preflight, .executing, .cancelling: return .ejecting
+        case .awaitingConfirmation: return .preview
+        default: return screen
+        }
+    }
+    private var directoriesVisible: Bool {
+        defaults.bool(forKey: PanelSetting.capacity) && defaults.bool(forKey: PanelSetting.breakdownOpen)
+    }
+
+    init(runner: CommandRunner = SystemCommandRunner(), defaults: UserDefaults = .standard,
+         start: Bool = true) {
         self.runner = runner
-        mountPoint = pinnedMountPoint
-        observeMounts()
-        refresh()
+        self.defaults = defaults
+        PanelSetting.registerDefaults(defaults)
+        mountPoint = defaults.string(forKey: "targetMountPoint") ?? "/Volumes/Developer"
+        lastDirectoryVisible = directoriesVisible
+        if start {
+            observeMounts()
+            settingsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+                object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, !self.operation.locksTarget else { return }
+                    let visible = self.directoriesVisible
+                    if visible != self.lastDirectoryVisible {
+                        self.lastDirectoryVisible = visible
+                        self.invalidateScans()
+                        self.refresh()
+                    }
+                }
+            }
+            refresh()
+        }
     }
-
     deinit {
-        let center = NSWorkspace.shared.notificationCenter
-        observers.forEach(center.removeObserver)
+        observers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+        scanToken.cancel()
+        operationToken?.cancel()
     }
-
-    var isMounted: Bool {
-        FileManager.default.fileExists(atPath: mountPoint)
-    }
-
-    // MARK: - Mount observation
 
     private func observeMounts() {
-        let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
-            observers.append(center.addObserver(
-                forName: name, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in self?.refresh() }
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let path = (note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL)?.path
+                Task { @MainActor in self?.mountsChanged(path: path) }
             })
         }
     }
 
-    // MARK: - Refresh
+    func mountsChanged(path: String?) {
+        session = UUID()
+        invalidateScans()
+        if operation.locksTarget {
+            let relevant = path == nil || path == mountPoint || ejectPlan?.target.affected.contains(where: { $0.mount == path }) == true
+            if relevant && operationToken?.isCommitted != true {
+                if operation == .awaitingConfirmation {
+                    operationToken?.cancel()
+                    ejectPlan = nil
+                    operation = .finished
+                    screen = .connected
+                    ejectFailure = "挂载状态已变化，原预览已失效，请重新检测"
+                    refresh()
+                } else { cancelEject() }
+            }
+            return
+        }
+        refresh()
+    }
 
-    func refresh() {
-        // Discovery runs before anything else so an unplugged pinned volume can hand
-        // over to whatever is actually attached, instead of showing "未连接" while a
-        // drive sits mounted.
-        let runner = self.runner
+    private func invalidateScans() {
+        generation += 1
+        scanToken.cancel()
+        scanToken = CancellationToken()
+        refreshActive = false
+        pendingRefresh = false
+        directoriesLoading = false
+        occupancyScanning = false
+    }
+
+    func refresh(force: Bool = false) {
+        guard !operation.locksTarget else { return }
+        if force { cache.removeAll() }
+        if refreshActive { pendingRefresh = pendingRefresh || force; return }
+        refreshActive = true
+        let g = generation, token = scanToken, discover = self.discover
+        let scoped = ScopedCommandRunner(base: runner, cancellation: token)
         work.async { [weak self] in
-            let found = VolumeDiscovery(runner: runner).drives()
-            Task { @MainActor in self?.applyDiscovery(found) }
+            let result = discover(scoped)
+            Task { @MainActor in
+                guard let self, self.generation == g, !token.isCancelled, !self.operation.locksTarget else { return }
+                guard result.isComplete, let found = result.value else {
+                    self.lastError = "磁盘发现未完成：" + result.issues.joined(separator: "；")
+                    self.finishRefresh()
+                    return
+                }
+                self.applyDiscovery(found)
+                if self.mounted { self.refreshCurrent() } else { self.finishRefresh() }
+            }
         }
-        refreshCurrent()
     }
 
-    /// Picks the volume to show, then probes it.
-    private func applyDiscovery(_ found: [DiscoveredVolume]) {
+    private func finishRefresh() {
+        refreshActive = false
+        if pendingRefresh { pendingRefresh = false; refresh(force: true) }
+    }
+
+    func applyDiscovery(_ found: [DiscoveredVolume]) {
         drives = found
-        guard screen != .ejecting else { return }
-
-        switch VolumeDiscovery.choose(drives: found, pinned: pinnedMountPoint) {
-        case .pinned(let m), .only(let m):
-            if mountPoint != m {
-                mountPoint = m
-                snapshot = nil
-                directories = []
-                occupancy = nil
-                refreshCurrent()
+        guard !operation.locksTarget else { return }
+        let pinnedUUID = defaults.string(forKey: "targetVolumeUUID")
+        let chosen: DiscoveredVolume?
+        if let pinnedUUID, !pinnedUUID.isEmpty {
+            chosen = found.first { $0.volumeUUID == pinnedUUID }
+                ?? found.first { $0.mountPoint == mountPoint && identity($0) == selectedIdentity }
+                ?? (found.count == 1 ? found.first : nil)
+        } else {
+            chosen = found.first { $0.mountPoint == pinnedMountPoint }
+                ?? found.first { $0.mountPoint == mountPoint }
+                ?? (found.count == 1 ? found.first : nil)
+            if let match = found.first(where: { $0.mountPoint == pinnedMountPoint }), !match.volumeUUID.isEmpty {
+                defaults.set(match.volumeUUID, forKey: "targetVolumeUUID")
             }
-        case .pick:
-            // Several attached and none pinned online: let the user say which.
-            if !found.contains(where: { $0.mountPoint == mountPoint }) {
-                screen = .drives
-            }
-        case .none:
-            if mountPoint != pinnedMountPoint { mountPoint = pinnedMountPoint }
         }
+        guard let chosen else {
+            mounted = false
+            selectedIdentity = nil
+            snapshot = nil; directories = []; occupancy = nil
+            if found.isEmpty {
+                if case .ejected = screen {} else { screen = .disconnected }
+            } else { screen = .drives }
+            return
+        }
+        if chosen.volumeUUID == defaults.string(forKey: "targetVolumeUUID") {
+            defaults.set(chosen.mountPoint, forKey: "targetMountPoint")
+        }
+        let next = identity(chosen)
+        if next != selectedIdentity || mountPoint != chosen.mountPoint {
+            generation += 1
+            scanToken.cancel(); scanToken = CancellationToken()
+            snapshot = nil; directories = []; occupancy = nil
+            selectedIdentity = next
+        }
+        mountPoint = chosen.mountPoint
+        mounted = true
+        verifiedEjected = nil
+        if screen == .disconnected || screen == .drives { screen = .connected }
+        if case .ejected = screen { screen = .connected }
     }
 
-    /// Switches to a drive the user picked from the list.
+    private func identity(_ drive: DiscoveredVolume) -> VolumeIdentity {
+        .init(uuid: drive.volumeUUID, device: drive.deviceIdentifier, session: session)
+    }
+
     func select(_ volume: DiscoveredVolume) {
-        guard screen != .ejecting else { return }
+        guard !operation.locksTarget else { return }
+        invalidateScans()
+        selectedIdentity = identity(volume)
         mountPoint = volume.mountPoint
-        snapshot = nil
-        directories = []
-        occupancy = nil
-        ejectFailure = nil
+        mounted = true
+        verifiedEjected = nil
+        snapshot = nil; directories = []; occupancy = nil; ejectFailure = nil; lastError = nil
         screen = .connected
+        refreshActive = true
         refreshCurrent()
     }
-
-    /// Makes a drive the one that wins on reconnect.
     func pin(_ volume: DiscoveredVolume) {
-        pinnedMountPoint = volume.mountPoint
+        guard !operation.locksTarget else { return }
+        defaults.set(volume.mountPoint, forKey: "targetMountPoint")
+        defaults.set(volume.volumeUUID, forKey: "targetVolumeUUID")
         select(volume)
     }
 
     private func refreshCurrent() {
-        guard isMounted else {
-            // Keep the eject-success screen up until the drive is physically
-            // unplugged so the "safe to disconnect" confirmation is not lost.
-            // `.ejecting` is likewise left alone: diskutil's own unmount fires
-            // didUnmountNotification mid-flow, and rewriting the screen here yanked
-            // the user off the progress list before the flow could report its result.
-            switch screen {
-            case .ejected, .ejecting: break
-            default: screen = .disconnected
-            }
-            snapshot = nil
-            directories = []
-            occupancy = nil
-            return
-        }
-
-        // Correct a stale screen immediately rather than waiting for the probe: the
-        // eject-success screen is kept deliberately while the volume is gone, and
-        // without this it survives a remount whose notification was missed. An
-        // in-flight eject is never touched.
-        if screen != .ejecting {
-            if case .ejected = screen { screen = .connected }
-            if screen == .disconnected { screen = .connected }
-        }
-
-        let mount = mountPoint
-        let probeRunner = self.runner
+        let mount = mountPoint, g = generation, token = scanToken, id = selectedIdentity
+        let scoped = ScopedCommandRunner(base: runner, cancellation: token)
+        let probe = probeVolume
         work.async { [weak self] in
-            let result = Self.probe(mount: mount, runner: probeRunner)
+            let result = probe(mount, scoped)
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.accepts(g, id, mount, token) else { return }
                 switch result {
                 case .success(let snap):
-                    self.snapshot = snap
-                    self.occupancy = snap.occupancy
-                    self.lastError = nil
-                    if self.screen != .ejecting {
-                        if self.screen == .disconnected { self.screen = .connected }
-                        if case .ejected = self.screen { self.screen = .connected }
+                    guard snap.volume.mountPoint == mount,
+                          self.drives.first(where: { $0.mountPoint == mount }).map({ $0.volumeUUID == snap.volume.volumeUUID }) ?? false else {
+                        self.lastError = "探针返回了不同的卷，请重新检测"
+                        self.finishRefresh(); return
                     }
-                case .failure(let e):
-                    self.lastError = e.localizedDescription
+                    self.snapshot = snap; self.occupancy = snap.occupancy; self.lastError = nil
+                    self.loadDirectories(g: g, id: id, mount: mount, token: token)
+                case .failure(let error):
+                    self.lastError = error.localizedDescription
+                    self.finishRefresh()
                 }
             }
-            Self.loadDirectories(mount: mount, runner: probeRunner, into: self)
         }
     }
-
-    /// Everything except `du`, which is slow enough to load separately.
-    nonisolated private static func probe(
-        mount: String, runner: CommandRunner
-    ) -> Result<DiskSnapshot, Error> {
-        do {
-            let vp = VolumeProbe(runner: runner)
-            guard let volume = try vp.volume(at: mount) else {
-                return .failure(CommandError.notFound(mount))
-            }
-            let hardware = try vp.hardware(physicalDisk: volume.physicalDisk)
-
-            var health: SmartHealth?
-            var healthReason: String?
-            do {
-                health = try HealthProbe(runner: runner).health(
-                    physicalDisk: volume.physicalDisk)
-            } catch {
-                healthReason = error.localizedDescription
-            }
-
-            let cp = ConfigProbe(runner: runner)
-            let indexing = try? cp.spotlightIndexing(mountPoint: mount)
-            let checks = cp.checks(volume: volume, health: health)
-            let occ = try? Occupancy(runner: runner).quickScan(
-                mountPoint: mount, indexingOn: indexing)
-
-            return .success(DiskSnapshot(
-                volume: volume, hardware: hardware, health: health,
-                healthUnavailableReason: healthReason, checks: checks,
-                directories: [], occupancy: occ))
-        } catch {
-            return .failure(error)
-        }
+    private func accepts(_ g: Int, _ id: VolumeIdentity?, _ mount: String, _ token: CancellationToken) -> Bool {
+        g == generation && id == selectedIdentity && mount == mountPoint && !token.isCancelled && !operation.locksTarget
     }
-
-    /// `du` walks the whole volume, so it runs after the fast probes and publishes
-    /// separately rather than holding up the rest of the panel.
-    nonisolated private static func loadDirectories(
-        mount: String, runner: CommandRunner, into store: DiskStore?
-    ) {
-        Task { @MainActor in store?.directoriesLoading = true }
-        let dirs = (try? VolumeProbe(runner: runner).directoryUsage(mountPoint: mount)) ?? []
-        Task { @MainActor in
-            store?.directories = dirs
-            store?.directoriesLoading = false
+    private func loadDirectories(g: Int, id: VolumeIdentity?, mount: String, token: CancellationToken) {
+        guard directoriesVisible, let id else { finishRefresh(); return }
+        if let cached = cache[id], now().timeIntervalSince(cached.0) < 300 {
+            directories = cached.1; directoryIssue = nil; finishRefresh(); return
         }
-    }
-
-    // MARK: - Occupancy
-
-    /// The thorough path walks the whole volume, so it only ever runs on demand.
-    func fullScan() {
-        guard isMounted, !occupancyScanning else { return }
-        occupancyScanning = true
-        let mount = mountPoint
-        let runner = self.runner
+        directoriesLoading = true
+        let loader = directoryUsage, scoped = ScopedCommandRunner(base: runner, cancellation: token)
         work.async { [weak self] in
+            let result = ProbeResult<[DirectoryUsage]>.capture { try loader(mount, scoped) }
+            Task { @MainActor in
+                guard let self, self.accepts(g, id, mount, token) else { return }
+                self.directoriesLoading = false
+                if let value = result.value, result.isComplete {
+                    self.directories = value; self.cache[id] = (self.now(), value); self.directoryIssue = nil
+                } else { self.directoryIssue = result.issues.joined(separator: "；") }
+                self.finishRefresh()
+            }
+        }
+    }
+
+    nonisolated private static func probe(mount: String, runner: CommandRunner) -> Result<DiskSnapshot, Error> {
+        Result {
+            let vp = VolumeProbe(runner: runner)
+            guard let volume = try vp.volume(at: mount) else { throw ProbeFailure("无法读取目标卷") }
+            let hardware = (try? vp.hardware(physicalDisk: volume.physicalDisk)) ?? DriveHardware()
+            let health = ProbeResult<SmartHealth>.capture { try HealthProbe(runner: runner).health(physicalDisk: volume.physicalDisk) }
             let cp = ConfigProbe(runner: runner)
             let indexing = try? cp.spotlightIndexing(mountPoint: mount)
-            let report = try? Occupancy(runner: runner).fullScan(
-                mountPoint: mount, indexingOn: indexing)
+            let quick = ProbeResult<OccupancyReport>.capture { try Occupancy(runner: runner).quickScan(mountPoint: mount, indexingOn: indexing) }
+            let occupancy = quick.value ?? OccupancyReport(holders: [], scanDepth: .quick, scannedAt: Date(), duration: 0,
+                                                           openFilesFound: nil, state: .unavailable, issues: quick.issues)
+            return DiskSnapshot(volume: volume, hardware: hardware, health: health.value,
+                healthUnavailableReason: health.issues.isEmpty ? nil : health.issues.joined(separator: "；"),
+                checks: cp.checks(volume: volume, health: health.value), directories: [], occupancy: occupancy)
+        }
+    }
+
+    func fullScan() {
+        guard mounted, !operation.locksTarget, !occupancyScanning else { return }
+        invalidateScans()
+        occupancyScanning = true
+        let mount = mountPoint, g = generation, id = selectedIdentity, token = scanToken
+        let scoped = ScopedCommandRunner(base: runner, cancellation: token)
+        work.async { [weak self] in
+            let result = ProbeResult<OccupancyReport>.capture { try Occupancy(runner: scoped).fullScan(mountPoint: mount, indexingOn: nil) }
             Task { @MainActor in
-                guard let self else { return }
-                if let report { self.occupancy = report }
+                guard let self, self.accepts(g, id, mount, token) else { return }
+                self.occupancy = result.value ?? OccupancyReport(holders: [], scanDepth: .full, scannedAt: Date(), duration: 0,
+                    openFilesFound: nil, state: .unavailable, issues: result.issues)
                 self.occupancyScanning = false
             }
         }
     }
 
-    // MARK: - Eject
-
     func eject() {
-        guard isMounted else { return }
-        // Re-entrancy guard: a second click used to start a concurrent flow.
-        guard screen != .ejecting else { return }
-        screen = .ejecting
-        ejectSteps = []
-        lastError = nil
-        ejectFailure = nil
-
-        let mount = mountPoint
-        let runner = self.runner
-        ejectQueue.async { [weak self] in
-            let indexing = try? ConfigProbe(runner: runner).spotlightIndexing(mountPoint: mount)
-            let flow = EjectFlow(runner: runner, mountPoint: mount)
-            flow.onUpdate = { steps in
-                Task { @MainActor in self?.ejectSteps = steps }
-            }
-            let outcome = flow.run(indexingOn: indexing)
-
-            Task { @MainActor in
-                guard let self else { return }
-                switch outcome {
-                case .ejected(let t, let apps, let daemons):
-                    self.ejectFailure = nil
-                    self.screen = .ejected(t, apps: apps, daemons: daemons)
-                    self.lastEjectSummary = Self.summary(t, apps: apps, daemons: daemons)
-                    self.snapshot = nil
-                    self.directories = []
-                case .aborted(let why):
-                    self.ejectFailure = why
-                    self.screen = .connected
-                    self.refresh()
-                }
+        guard mounted, !operation.locksTarget else { return }
+        beginPreflight()
+    }
+    func retryPreflight() {
+        guard operation == .awaitingConfirmation else { return }
+        operationToken?.cancel()
+        beginPreflight()
+    }
+    private func beginPreflight() {
+        invalidateScans()
+        operation = .preflight; screen = .ejecting
+        ejectPlan = nil; ejectFailure = nil; lastError = nil; waitingForSystem = false
+        ejectSteps = [.init(id: "scan", title: "只读预检：确认目标与占用", state: .running)]
+        let token = CancellationToken()
+        operationToken = token
+        let mount = mountPoint, maker = makeFlow, runner = self.runner
+        let expected = drives.first(where: { $0.mountPoint == mount }).map {
+            TargetVolume(name: $0.name, mount: $0.mountPoint, device: $0.deviceIdentifier, uuid: $0.volumeUUID)
+        }
+        let operationQueue = ejectQueue
+        // Barrier behind cancelled probes: our du/lsof must release their handles first.
+        work.async { [weak self] in
+            operationQueue.async { [weak self] in
+                let flow = maker(runner, mount, token)
+                flow.expectedVolume = expected
+                self?.wire(flow, token: token)
+                let outcome = flow.run(indexingOn: nil)
+                Task { @MainActor in self?.receive(outcome, token: token) }
             }
         }
     }
-
-    nonisolated static func summary(
-        _ duration: TimeInterval, apps: Int, daemons: Int
-    ) -> String {
-        let t = String(format: "%.1f", duration)
-        var parts = ["耗时 \(t) 秒"]
-        if apps > 0 { parts.append("停止了 \(apps) 个应用") }
-        if daemons > 0 { parts.append("\(daemons) 个守护进程") }
-        return parts.joined(separator: " · ")
+    nonisolated private func wire(_ flow: EjectFlow, token: CancellationToken) {
+        flow.onUpdate = { [weak self] steps in
+            Task { @MainActor in
+                guard let self, self.operationToken === token, self.operation.locksTarget else { return }
+                self.ejectSteps = steps
+            }
+        }
+        flow.onCommit = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.operationToken === token, self.operation == .preflight || self.operation == .executing || self.operation == .cancelling else { return }
+                self.waitingForSystem = true
+                self.operation = .executing
+            }
+        }
     }
-
-    // MARK: - Actions
-
+    func confirmEject(systemOnly: Bool = false) {
+        guard operation == .awaitingConfirmation, let plan = ejectPlan,
+              let token = operationToken, !token.isCancelled else { return }
+        operation = .executing; screen = .ejecting
+        let flow = makeFlow(runner, mountPoint, token)
+        wire(flow, token: token)
+        ejectQueue.async { [weak self] in
+            let outcome = flow.execute(plan, systemOnly: systemOnly)
+            Task { @MainActor in self?.receive(outcome, token: token) }
+        }
+    }
+    func cancelEject() {
+        guard canCancel, let token = operationToken else { return }
+        token.cancel()
+        if operation == .awaitingConfirmation {
+            operation = .finished; ejectPlan = nil; screen = .connected
+            ejectFailure = "已取消预览，未执行处理操作"
+            refresh()
+        } else { operation = .cancelling }
+    }
+    private func receive(_ outcome: EjectFlow.Outcome, token: CancellationToken) {
+        guard operationToken === token else { return }
+        if token.isCancelled {
+            operation = .finished; screen = .connected; ejectPlan = nil
+            if case .aborted(let why) = outcome { ejectFailure = why }
+            else { ejectFailure = "操作已中止；已发出的请求无法撤销" }
+            refresh(); return
+        }
+        switch outcome {
+        case .preview(let plan):
+            ejectPlan = plan; operation = .awaitingConfirmation; screen = .preview
+            waitingForSystem = false
+        case .ejected(let duration, let apps, let daemons):
+            operation = .finished; screen = .ejected(duration, apps: apps, daemons: daemons)
+            verifiedEjected = screen
+            mounted = false; snapshot = nil; directories = []; occupancy = nil; ejectPlan = nil
+            cache.removeAll()
+            lastEjectSummary = Self.summary(duration, apps: apps, daemons: daemons)
+        case .aborted(let why):
+            operation = .finished; screen = .connected; ejectFailure = why; ejectPlan = nil
+            refresh()
+        }
+    }
+    nonisolated static func summary(_ duration: TimeInterval, apps: Int, daemons: Int) -> String {
+        "耗时 \(String(format: "%.1f", duration)) 秒 · 确认退出 \(apps) 个应用、停止 \(daemons) 个服务进程"
+    }
     func dismissEjectFailure() { ejectFailure = nil }
-
-    func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    func openSettings(_ url: String) {
-        guard let u = URL(string: url) else { return }
-        NSWorkspace.shared.open(u)
-    }
-
-    func quit() { NSApplication.shared.terminate(nil) }
-
+    func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
+    func openSettings(_ url: String) { if let u = URL(string: url) { NSWorkspace.shared.open(u) } }
+    func quit() { guard !operation.locksTarget else { return }; NSApplication.shared.terminate(nil) }
     static let mainWindowID = "devdisk.main"
 }

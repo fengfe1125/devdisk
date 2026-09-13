@@ -59,7 +59,7 @@ struct PanelView: View {
         // ScrollView. Reset it before measuring a new screen; otherwise a short
         // ejected/disconnected screen can spend one layout pass inside the old
         // long-screen height and leave the popover host window oversized.
-        .onChange(of: store.screen) { _, _ in
+        .onChange(of: store.activeScreen) { _, _ in
             contentHeight = 0
         }
     }
@@ -88,9 +88,10 @@ struct PanelView: View {
     }
 
     @ViewBuilder private var screen: some View {
-        switch store.screen {
+        switch store.activeScreen {
         case .connected:            ConnectedView()
         case .scan:                 ScanView()
+        case .preview:              EjectPreviewView()
         case .settings:             SettingsPanel()
         case .drives:               DrivePickerView()
         case .ejecting:             EjectingView()
@@ -100,9 +101,10 @@ struct PanelView: View {
     }
 
     @ViewBuilder private var actionFooter: some View {
-        switch store.screen {
+        switch store.activeScreen {
         case .connected:    ConnectedFooter()
         case .scan:         ScanFooter()
+        case .preview:      EjectPreviewFooter()
         case .settings:     SettingsFooter()
         case .drives:       DrivePickerFooter()
         case .ejecting:     EjectingFooter()
@@ -142,19 +144,22 @@ struct PanelView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(store.operation.locksTarget)
             Spacer(minLength: 4)
 
             // .plain rather than .borderless/.link: those styles bridge to AppKit
             // controls, which ImageRenderer cannot rasterize for the snapshot check.
             // Appearance is identical.
             if store.screen == .connected || store.screen == .scan {
-                IconButton(symbol: "arrow.clockwise", help: "刷新") { store.refresh() }
+                IconButton(symbol: "arrow.clockwise", help: "刷新") { store.refresh(force: true) }
             }
             IconButton(symbol: "gearshape", help: "设置") {
                 store.screen = store.screen == .settings
                     ? (store.isMounted ? .connected : .disconnected)
                     : .settings
             }
+
+            .disabled(store.operation.locksTarget)
 
             if presentation == .popover {
                 IconButton(symbol: "macwindow", help: "在窗口中打开") {
@@ -163,6 +168,7 @@ struct PanelView: View {
                 }
             }
             IconButton(symbol: "power", help: "退出 DevDisk") { store.quit() }
+                .disabled(store.operation.locksTarget)
         }
         .padding(.horizontal, UI.hPad)
         .padding(.top, 13)
@@ -182,7 +188,7 @@ struct PanelView: View {
     }
 
     private var active: Bool {
-        switch store.screen {
+        switch store.activeScreen {
         case .disconnected, .ejected: return false
         default: return true
         }
@@ -194,7 +200,7 @@ struct PanelView: View {
     }
 
     private var dotColor: Color {
-        switch store.screen {
+        switch store.activeScreen {
         case .ejecting:               return .orange
         case .disconnected, .ejected: return .secondary
         default:                      return .green
@@ -203,8 +209,9 @@ struct PanelView: View {
 
     private var subtitle: String {
         if let e = store.lastError, store.screen == .connected { return e }
-        switch store.screen {
-        case .ejecting:     return "正在卸载…"
+        switch store.activeScreen {
+        case .ejecting:     return store.waitingForSystem ? "等待系统结果，请勿拔线" : "正在准备弹出…"
+        case .preview:      return "请核对弹出影响"
         case .ejected:      return "已卸载 · 可安全拔线"
         case .disconnected: return "未连接"
         case .settings:
@@ -213,7 +220,7 @@ struct PanelView: View {
             return store.drives.isEmpty ? "没有外置盘" : "选择要查看的盘"
         case .scan:
             let n = store.occupancy?.holders.count ?? 0
-            return "\(n) 个进程正在使用"
+            return "\(n) 个检测条目"
         case .connected:
             guard let s = store.snapshot else { return store.mountPoint }
             return [s.hardware.model, s.volume.filesystem]
@@ -319,7 +326,7 @@ struct EjectedView: View {
                 title: "可以安全拔线",
                 message: AnyView(
                     VStack(spacing: 3) {
-                        Text("卷已卸载，无残留挂载点。")
+                        Text("物理盘已离线，关联卷已卸载。")
                         if let s = store.lastEjectSummary { Text(s) }
                     }
                 )
@@ -333,7 +340,7 @@ struct EjectedFooter: View {
     @EnvironmentObject var store: DiskStore
 
     var body: some View {
-        PrimaryButton(title: "好") { store.refresh() }
+        PrimaryButton(title: "好") { store.refresh(force: true) }
             .padding(.horizontal, UI.hPad)
             .padding(.vertical, 11)
     }

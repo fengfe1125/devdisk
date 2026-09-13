@@ -129,6 +129,7 @@ private struct GeneralSettingsTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .disabled(store.operation.locksTarget)
         .formStyle(.grouped)
         .onAppear { draft = store.pinnedMountPoint }
     }
@@ -138,8 +139,7 @@ private struct GeneralSettingsTab: View {
         // camera card mounts at "/Volumes/NIKON Z 6  "), and trimming makes the path
         // stop matching the volume it names. Only a blank entry is rejected.
         guard !draft.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        mountPoint = draft
         store.pinnedMountPoint = draft
-        store.refresh()
+        store.refresh(force: true)
     }
 }

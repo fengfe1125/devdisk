@@ -13,7 +13,7 @@ struct EjectingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PanelSection(title: "正在安全弹出",
+            PanelSection(title: store.operation == .preflight ? "正在只读预检" : store.operation == .cancelling ? "正在中止" : "正在安全弹出",
                     aside: "\(doneCount) / \(store.ejectSteps.count)") {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(store.ejectSteps) { StepRow(step: $0) }
@@ -30,14 +30,14 @@ struct EjectingFooter: View {
     var body: some View {
         VStack(spacing: 7) {
             Button("中止") {
-                store.screen = .connected
-                store.refresh()
+                store.cancelEject()
             }
+            .disabled(!store.canCancel)
             .buttonStyle(.bordered)
             .controlSize(.large)
             .frame(maxWidth: .infinity)
 
-            Text("中止不会撤销已停止的进程")
+            Text(store.waitingForSystem ? "等待系统结果，请勿拔线" : "中止将停止后续步骤；已发出的请求无法撤销")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
         }

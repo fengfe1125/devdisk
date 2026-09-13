@@ -79,6 +79,7 @@ struct ConnectedView: View {
             CapacityBar(volume: snap.volume,
                         directories: store.directories,
                         loading: store.directoriesLoading)
+            if let issue = store.directoryIssue { Text("目录统计未完成：" + issue).font(.caption).foregroundStyle(.orange) }
         }
     }
 
@@ -196,7 +197,7 @@ struct ConnectedView: View {
     @ViewBuilder private func checks(_ snap: DiskSnapshot) -> some View {
         let warnings = snap.warningCount
         PanelSection(title: "配置检查",
-                aside: warnings > 0 ? "\(warnings) 项需注意" : "全部正常",
+                aside: warnings > 0 ? "\(warnings) 项需注意 / 未知" : "已完成检查正常",
                 asideColor: warnings > 0 ? .orange : .green) {
             let problems = snap.checks.filter { $0.severity != .ok }
             let passing = snap.checks.filter { $0.severity == .ok }
@@ -242,7 +243,7 @@ struct ConnectedView: View {
         let system = report?.holders(.system) ?? []
 
         PanelSection(title: "谁在使用",
-                aside: "\(mine.count) 个你的进程 · \(system.count) 个系统进程") {
+                aside: report?.scanDepth == .quick ? "可能相关 · 尚未核验" : "\(mine.count) 个你的进程 · 系统可见性受限") {
             VStack(spacing: 1) {
                 ForEach(mine) { h in
                     HStack(spacing: 8) {
@@ -253,7 +254,7 @@ struct ConnectedView: View {
                                 .font(.system(size: 10.5)).monospacedDigit()
                                 .foregroundStyle(.tertiary)
                         }
-                        Text(h.kind == .guiApp ? "请求退出" : "自动停止")
+                        Text(report?.scanDepth == .quick ? "可能相关" : h.kind == .guiApp ? "需确认退出" : h.kind == .daemon ? "需确认停止" : "手动处理")
                             .font(.system(size: 9.5, weight: .semibold))
                             .padding(.horizontal, 5).padding(.vertical, 1.5)
                             .background(
@@ -282,8 +283,11 @@ struct ConnectedView: View {
                     .padding(.vertical, 3)
                 }
 
+                if let report, !report.issues.isEmpty {
+                    Text(report.issues.joined(separator: "；")).font(.caption).foregroundStyle(.orange)
+                }
                 if mine.isEmpty && system.isEmpty {
-                    Text("没有检测到占用进程")
+                    Text(report == nil || report?.state != .complete ? "占用状态未知" : report?.scanDepth == .quick ? "未发现候选进程，弹出前将完整预检" : "未发现当前用户的占用")
                         .font(.system(size: 11.5)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 3)
@@ -313,9 +317,6 @@ struct ConnectedFooter: View {
     }
 
     private var hint: String {
-        let apps = store.occupancy?.holders(.guiApp) ?? []
-        return apps.isEmpty
-            ? "将停止守护进程后卸载卷"
-            : "将先请求 \(apps.map(\.name).joined(separator: "、")) 退出，再停止守护进程"
+        "先只读预检；需要处理应用或服务时再确认"
     }
 }

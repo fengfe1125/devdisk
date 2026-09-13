@@ -28,30 +28,44 @@ public enum Snapshot {
         let mount = arguments[i + 1]
 
         let runner = SystemCommandRunner()
-        let indexing = try? ConfigProbe(runner: runner).spotlightIndexing(mountPoint: mount)
         let flow = EjectFlow(runner: runner, mountPoint: mount)
-        var printed = Set<String>()
         flow.onUpdate = { steps in
-            for s in steps {
-                let line: String
-                switch s.state {
-                case .pending, .running: continue
-                case .done(let d):    line = "  ✓ \(s.title)" + (d.map { " — \($0)" } ?? "")
-                case .skipped(let d): line = "  – \(s.title) — \(d)"
-                case .failed(let d):  line = "  ✗ \(s.title) — \(d)"
-                }
-                if printed.insert(s.id).inserted { print(line) }
+            if let active = steps.first(where: { $0.state == .running }) { print(active.title) }
+        }
+        var outcome = flow.run(indexingOn: nil)
+        while case .preview(let plan) = outcome {
+            print("弹出影响：\(plan.target.volume.name) · \(plan.target.volume.mount)")
+            for volume in plan.target.affected { print("关联卷：\(volume.name) · \(volume.mount)") }
+            for holder in plan.apps + plan.daemons + plan.manual {
+                print("\(holder.name) · \(holder.openFileCount ?? 0) 个文件 · \(holder.kind)")
+                holder.sampleFiles.forEach { print("  " + $0) }
+            }
+            plan.images.forEach { print("映像：\($0.path) · \($0.writable ? "需手动处理" : "只读")") }
+            plan.issues.forEach { print("检测不完整：" + $0) }
+            guard isatty(STDIN_FILENO) == 1 else {
+                print("需要交互确认；未执行退出、停止或弹出操作。")
+                return false
+            }
+            if plan.canSystemOnly {
+                print("输入 system 仅尝试普通系统弹出；其他输入取消：")
+                guard readLine() == "system" else { return false }
+                outcome = flow.execute(plan, systemOnly: true)
+            } else if plan.canPrepare {
+                print("退出应用影响整个应用，后台服务可能仍在工作。输入 yes 确认处理并弹出；其他输入取消：")
+                guard readLine() == "yes" else { return false }
+                outcome = flow.execute(plan, systemOnly: false)
+            } else {
+                print("请手动处理上述阻塞对象后重新运行。")
+                return false
             }
         }
-
-        print("弹出 \(mount)")
-        switch flow.run(indexingOn: indexing) {
+        switch outcome {
         case .ejected(let t, let apps, let daemons):
-            print("成功 · \(String(format: "%.1f", t)) 秒 · 应用 \(apps) · 守护进程 \(daemons)")
-        case .aborted(let why):
-            print("中止：\(why)")
+            print("成功 · \(String(format: "%.1f", t)) 秒 · 应用 \(apps) · 服务进程 \(daemons)")
+            return true
+        case .aborted(let why): print("中止：\(why)"); return false
+        case .preview: return false
         }
-        return true
     }
 
     /// `DevDisk --check-update [version]` runs a real update check against GitHub
@@ -115,7 +129,7 @@ public enum Snapshot {
             atPath: dir, withIntermediateDirectories: true)
 
         let runner = SystemCommandRunner()
-        let store = DiskStore(runner: runner)
+        let store = DiskStore(runner: runner, defaults: previewDefaults(), start: false)
         store.mountPoint = mountPoint
 
         // No network in snapshot mode: one checker with nothing to report, one
@@ -215,6 +229,44 @@ public enum Snapshot {
                 print("\(path)  \(Int(image.size.width))×\(Int(image.size.height))")
             }
         }
+    }
+
+    /// Deterministic snapshots of the real views. All operations use DemoMachine.
+    public static func runDemo(arguments: [String]) async -> Bool {
+        guard let i = arguments.firstIndex(of: "--snapshot-demo"), i + 1 < arguments.count else { return false }
+        let dir = URL(fileURLWithPath: arguments[i + 1])
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        catch { print(error.localizedDescription); return false }
+        let checker = UpdateChecker(fetcher: StubFetcher(), defaults: previewDefaults())
+        for scenario in ["short", "long", "unknown", "running", "waiting"] {
+            let store = DemoFixture.makeStore(scenario: scenario)
+            for _ in 0..<300 {
+                if store.operation == .awaitingConfirmation { break }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            guard store.ejectPlan != nil else { print("演示预检未完成：" + scenario); return false }
+            if scenario == "running" || scenario == "waiting" {
+                store.confirmEject()
+                for _ in 0..<300 {
+                    if scenario == "waiting" ? store.waitingForSystem : store.ejectSteps.contains(where: { $0.id == "apps" && $0.state == .running }) { break }
+                    try? await Task.sleep(nanoseconds: 10_000_000)
+                }
+            }
+            for (suffix, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
+                let view = PanelView(presentation: .snapshot)
+                    .environmentObject(store).environmentObject(checker)
+                    .environment(\.colorScheme, scheme).frame(width: UI.width)
+                    .background(scheme == .dark ? Color(white: 0.17) : Color(white: 0.96))
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                guard let nsImage = renderer.nsImage, let tiff = nsImage.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+                do { try png.write(to: dir.appendingPathComponent("\(scenario)-\(suffix).png")) }
+                catch { return false }
+            }
+            store.cancelEject()
+        }
+        return true
     }
 
     /// A representative mid-flight state; the live flow produces these for real.

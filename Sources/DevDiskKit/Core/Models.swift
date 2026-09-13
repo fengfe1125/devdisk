@@ -18,6 +18,8 @@ struct VolumeInfo {
 
     var totalBytes: Int64
     var freeBytes: Int64
+    var encryptionKnown: Bool = true
+    var ownershipKnown: Bool = true
     var usedBytes: Int64 { max(0, totalBytes - freeBytes) }
     var usedFraction: Double {
         totalBytes > 0 ? Double(usedBytes) / Double(totalBytes) : 0
@@ -85,7 +87,7 @@ struct SmartHealth {
 // MARK: - Configuration checks
 
 enum CheckSeverity {
-    case ok, warning, critical
+    case ok, warning, critical, unknown, notApplicable
 }
 
 struct ConfigCheck: Identifiable {
@@ -103,18 +105,19 @@ struct ConfigCheck: Identifiable {
 
 enum HolderKind {
     case guiApp        // asked to quit via AppleScript, never killed
-    case daemon        // safe to terminate; restarts on demand
+    case daemon        // only stopped after explicit confirmation
+    case manual        // foreground builds, VMs, or unknown processes
     case system        // not ours to touch; released by diskutil eject
 }
 
 /// How we learned about a holder. System daemons cannot be enumerated without root,
 /// so they are inferred from volume state rather than scanned — the UI says which.
-enum HolderEvidence {
+enum HolderEvidence: Equatable {
     case scanned(openFiles: Int, sampleFiles: [String])
     case inferred(reason: String)
 }
 
-struct Holder: Identifiable {
+struct Holder: Identifiable, Equatable {
     var id: String { pids.map(String.init).joined(separator: ",") + name }
     var name: String
     var pids: [Int32]
@@ -123,6 +126,7 @@ struct Holder: Identifiable {
     var evidence: HolderEvidence
     /// Bundle identifier, present for GUI apps so AppleScript can address them.
     var bundleID: String?
+    var identity: ProcessIdentity? = nil
 
     var openFileCount: Int? {
         if case .scanned(let n, _) = evidence { return n }
@@ -147,6 +151,8 @@ struct OccupancyReport {
     /// files walked. An unprivileged lsof can legitimately report zero on a busy
     /// volume, which is exactly why system holders are inferred separately.
     var openFilesFound: Int?
+    var state: ProbeState = .complete
+    var issues: [String] = []
 
     enum ScanDepth {
         case quick    // pgrep against a known list
@@ -155,7 +161,7 @@ struct OccupancyReport {
 
         var label: String {
             switch self {
-            case .quick:    return "快速检测"
+            case .quick:    return "快速检测 · 可能相关"
             case .full:     return "完整检测"
             case .elevated: return "管理员检测"
             }
@@ -186,7 +192,7 @@ struct DiskSnapshot {
     var occupancy: OccupancyReport?
 
     var warningCount: Int {
-        checks.filter { $0.severity != .ok }.count
+        checks.filter { $0.severity == .warning || $0.severity == .critical || $0.severity == .unknown }.count
     }
 }
 

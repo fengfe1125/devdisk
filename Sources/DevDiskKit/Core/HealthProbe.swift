@@ -31,6 +31,7 @@ struct HealthProbe {
         guard let disk = physicalDisk else { throw Unavailable.unsupported("") }
 
         let r = try runner.run(smartctl, ["-a", "-j", "/dev/" + disk])
+        if r.timedOut || r.cancelled { try r.requireSuccess("smartctl") }
         // smartctl uses a bitmask exit status; bits 0-2 mean the device could not be
         // opened or the command failed. Higher bits are health warnings and still
         // come with a valid payload, so they are not treated as failures here.

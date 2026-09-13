@@ -60,16 +60,27 @@ final class StatusBarController: NSObject {
     private func updateIcon() {
         guard let button = statusItem?.button else { return }
         let name = MenuBarIcon.name(
-            for: store.screen,
-            mounted: store.snapshot != nil,
+            for: store.statusScreen,
+            mounted: store.isMounted,
             hasWarnings: (store.snapshot?.warningCount ?? 0) > 0)
         button.image = MenuBarIcon.image(named: name)
             ?? NSImage(systemSymbolName: MenuBarIcon.fallbackSymbol(
-                for: store.screen,
-                mounted: store.snapshot != nil,
+                for: store.statusScreen,
+                mounted: store.isMounted,
                 hasWarnings: (store.snapshot?.warningCount ?? 0) > 0),
                 accessibilityDescription: "DevDisk")
         button.image?.size = NSSize(width: 16, height: 16)
+    }
+
+    func showPanel() {
+        // Menu tracking must end before a transient popover is shown, otherwise
+        // the menu dismissal immediately closes the acceptance popover as well.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            if !self.popover.isShown { self.togglePopover(nil) }
+            self.popover.contentViewController?.view.window?.makeKey()
+        }
     }
 
     @objc private func togglePopover(_ sender: Any?) {

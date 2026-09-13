@@ -13,6 +13,7 @@ struct ConfigProbe {
 
     func spotlightIndexing(mountPoint: String) throws -> Bool? {
         let r = try runner.run(Tool.mdutil, ["-s", mountPoint])
+        try r.requireSuccess("mdutil")
         return Self.parseSpotlight(r.text)
     }
 
@@ -27,6 +28,7 @@ struct ConfigProbe {
 
     func timeMachineExcluded(path: String) throws -> Bool? {
         let r = try runner.run(Tool.tmutil, ["isexcluded", path])
+        try r.requireSuccess("tmutil")
         return Self.parseExcluded(r.text)
     }
 
@@ -39,6 +41,7 @@ struct ConfigProbe {
 
     func diskSleepMinutes() throws -> Int? {
         let r = try runner.run(Tool.pmset, ["-g"])
+        try r.requireSuccess("pmset")
         return Self.parseDiskSleep(r.text)
     }
 
@@ -54,10 +57,11 @@ struct ConfigProbe {
 
     /// A leftover mount point directory makes the next mount land on "Developer 1",
     /// silently breaking every hardcoded path.
-    static func staleMountPoints(for name: String, fm: FileManager = .default) -> [String] {
-        let entries = (try? fm.contentsOfDirectory(atPath: "/Volumes")) ?? []
+    static func staleMountPoints(for name: String, fm: FileManager = .default) throws -> [String] {
+        let entries = try fm.contentsOfDirectory(atPath: "/Volumes")
+        let mounted = Set(try MountTable.paths())
         return entries
-            .filter { $0 != name && $0.hasPrefix(name + " ") }
+            .filter { $0 != name && $0.hasPrefix(name + " ") && !mounted.contains("/Volumes/" + $0) }
             .map { "/Volumes/" + $0 }
             .sorted()
     }
@@ -79,46 +83,33 @@ struct ConfigProbe {
                           fixCommand: nil,
                           settingsURL: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"))
 
-        if let excluded = try? timeMachineExcluded(path: mount), excluded == true {
-            out.append(ConfigCheck(
-                id: "timemachine", severity: .warning,
-                title: "Time Machine 已排除整卷",
-                detail: "源码与今后的签名 keystore 都不在备份内。",
-                fixCommand: "sudo tmutil removeexclusion \(shellQuote(mount))",
-                settingsURL: nil))
-        } else {
-            out.append(ConfigCheck(
-                id: "timemachine", severity: .ok,
-                title: "Time Machine 包含此卷",
-                detail: "卷内容会被备份。", fixCommand: nil, settingsURL: nil))
+        func unknown(_ id: String, _ title: String, _ issues: [String]) -> ConfigCheck {
+            ConfigCheck(id: id, severity: .unknown, title: title + " · 未知",
+                        detail: issues.joined(separator: "；"), fixCommand: nil, settingsURL: nil)
         }
+        let backup = ProbeResult<Bool>.capture { try timeMachineExcluded(path: mount) }
+        if let excluded = backup.value {
+            out.append(ConfigCheck(id: "timemachine", severity: excluded ? .warning : .ok,
+                title: excluded ? "Time Machine 已排除整卷" : "此卷未被整卷排除",
+                detail: excluded ? "本卷不在 Time Machine 的备份范围内。" : "这里只检查整卷排除设置，未验证备份是否成功或子目录是否另行排除。",
+                fixCommand: excluded ? "sudo tmutil removeexclusion \(shellQuote(mount))" : nil, settingsURL: nil))
+        } else { out.append(unknown("timemachine", "Time Machine", backup.issues)) }
 
-        if let indexing = try? spotlightIndexing(mountPoint: mount), indexing == true {
-            out.append(ConfigCheck(
-                id: "spotlight", severity: .warning,
-                title: "Spotlight 正在索引",
-                detail: "构建缓存被反复索引，白耗构建时的 IO。",
-                fixCommand: "sudo mdutil -i off \(shellQuote(mount))",
-                settingsURL: nil))
-        } else {
-            out.append(ConfigCheck(
-                id: "spotlight", severity: .ok,
-                title: "Spotlight 未索引此卷",
-                detail: "构建缓存不会被反复索引。", fixCommand: nil, settingsURL: nil))
-        }
+        let spotlight = ProbeResult<Bool>.capture { try spotlightIndexing(mountPoint: mount) }
+        if let enabled = spotlight.value {
+            out.append(ConfigCheck(id: "spotlight", severity: enabled ? .warning : .ok,
+                title: enabled ? "Spotlight 索引已启用" : "Spotlight 索引已关闭",
+                detail: enabled ? "构建缓存可能产生额外索引 IO；这不表示此刻正在索引。" : "此卷已关闭 Spotlight 索引。",
+                fixCommand: enabled ? "sudo mdutil -i off \(shellQuote(mount))" : nil, settingsURL: nil))
+        } else { out.append(unknown("spotlight", "Spotlight", spotlight.issues)) }
 
-        if let m = try? diskSleepMinutes(), m > 0 {
-            out.append(ConfigCheck(
-                id: "disksleep", severity: .warning,
-                title: "磁盘休眠 \(m) 分钟",
-                detail: "外置 NVMe 掉出总线会让正在跑的构建中断。",
-                fixCommand: "sudo pmset -a disksleep 0", settingsURL: nil))
-        } else {
-            out.append(ConfigCheck(
-                id: "disksleep", severity: .ok,
-                title: "磁盘休眠已关闭",
-                detail: "盘不会在空闲时掉出总线。", fixCommand: nil, settingsURL: nil))
-        }
+        let sleep = ProbeResult<Int>.capture { try diskSleepMinutes() }
+        if let minutes = sleep.value {
+            out.append(ConfigCheck(id: "disksleep", severity: minutes > 0 ? .warning : .ok,
+                title: minutes > 0 ? "磁盘休眠 \(minutes) 分钟" : "磁盘休眠已关闭",
+                detail: "系统级休眠设置，实际行为取决于磁盘及硬盘盒。",
+                fixCommand: minutes > 0 ? "sudo pmset -a disksleep 0" : nil, settingsURL: nil))
+        } else { out.append(unknown("disksleep", "磁盘休眠", sleep.issues)) }
 
         out.append(volume.ownersEnabled
             ? ConfigCheck(id: "owners", severity: .ok,
@@ -131,7 +122,8 @@ struct ConfigProbe {
                           fixCommand: "sudo diskutil enableOwnership \(shellQuote(mount))",
                           settingsURL: nil))
 
-        let stale = Self.staleMountPoints(for: volume.name)
+        let staleResult = ProbeResult<[String]>.capture { try Self.staleMountPoints(for: volume.name) }
+        let stale = staleResult.value ?? []
         out.append(stale.isEmpty
             ? ConfigCheck(id: "mountpoint", severity: .ok,
                           title: "挂载点正常",
@@ -144,6 +136,10 @@ struct ConfigProbe {
                                            .joined(separator: "; "),
                           settingsURL: nil))
 
+        if !staleResult.isComplete, let index = out.firstIndex(where: { $0.id == "mountpoint" }) {
+            out[index] = unknown("mountpoint", "残留挂载点", staleResult.issues)
+        }
+
         // Surfaced only when the counter says every power-off so far was unclean.
         if let h = health, h.allShutdownsUnsafe,
            let u = h.unsafeShutdowns, let c = h.powerCycles {
@@ -154,6 +150,17 @@ struct ConfigProbe {
                 fixCommand: nil, settingsURL: nil))
         }
 
+        if !volume.encryptionKnown, let i = out.firstIndex(where: { $0.id == "encryption" }) {
+            out[i] = unknown("encryption", "加密状态", ["设备未报告可识别的加密状态"])
+        }
+        if let i = out.firstIndex(where: { $0.id == "owners" }) {
+            if volume.filesystem.localizedCaseInsensitiveContains("exfat") || volume.filesystem.localizedCaseInsensitiveContains("fat32") {
+                out[i] = ConfigCheck(id: "owners", severity: .notApplicable, title: "卷所有权 · 不适用",
+                                     detail: "此文件系统不提供这项所有权设置。", fixCommand: nil, settingsURL: nil)
+            } else if !volume.ownershipKnown {
+                out[i] = unknown("owners", "卷所有权", ["设备未报告所有权设置"])
+            }
+        }
         return out
     }
 

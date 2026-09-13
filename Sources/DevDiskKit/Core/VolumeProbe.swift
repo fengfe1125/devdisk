@@ -38,9 +38,12 @@ struct VolumeProbe {
             volumeUUID: d["VolumeUUID"] as? String ?? "",
             deviceIdentifier: d["DeviceIdentifier"] as? String ?? "",
             containerReference: container,
-            physicalDisk: try container.flatMap { try resolvePhysical($0) },
+            physicalDisk: try container.flatMap { try resolvePhysical($0) }
+                ?? (container == nil ? (d["ParentWholeDisk"] as? String) : nil),
             totalBytes: cap.total,
-            freeBytes: cap.free
+            freeBytes: cap.free,
+            encryptionKnown: d["Encryption"] is Bool,
+            ownershipKnown: d["GlobalPermissionsEnabled"] is Bool
         )
     }
 
@@ -73,6 +76,7 @@ struct VolumeProbe {
 
     static func parsePhysicalDisk(_ d: [String: Any]) -> String? {
         guard let stores = d["APFSPhysicalStores"] as? [[String: Any]],
+              stores.count == 1,
               let store = stores.first?["APFSPhysicalStore"] as? String
         else { return nil }
         return wholeDisk(from: store)
@@ -108,7 +112,9 @@ struct VolumeProbe {
             model: it["device_model"] as? String ?? it["_name"] as? String,
             serial: it["device_serial"] as? String,
             firmware: it["device_revision"] as? String,
-            trimSupported: (it["spnvme_trim_support"] as? String)?.lowercased() == "yes",
+            trimSupported: (it["spnvme_trim_support"] as? String).flatMap {
+                $0.lowercased() == "yes" ? true : $0.lowercased() == "no" ? false : nil
+            },
             smartStatus: it["smart_status"] as? String,
             linkWidth: it["spnvme_linkwidth"] as? String,
             linkSpeed: it["spnvme_linkspeed"] as? String
@@ -120,12 +126,14 @@ struct VolumeProbe {
     /// `du -sk` per top-level entry. Walking the whole volume takes seconds, so callers
     /// run this off the main thread and cache the result.
     func directoryUsage(mountPoint: String) throws -> [DirectoryUsage] {
-        let entries = (try? FileManager.default.contentsOfDirectory(atPath: mountPoint)) ?? []
+        let entries = try FileManager.default.contentsOfDirectory(atPath: mountPoint)
         let visible = entries.filter { !$0.hasPrefix(".") }.sorted()
         guard !visible.isEmpty else { return [] }
 
         let r = try runner.run(Tool.du, ["-sk"] + visible.map { mountPoint + "/" + $0 },
                                timeout: Deadline.walk)
+        try r.requireSuccess("du")
+        guard r.stderr.isEmpty else { throw ProbeFailure("目录统计不完整：" + r.stderr) }
         return Self.parseDu(r.text).sorted { $0.bytes > $1.bytes }
     }
 

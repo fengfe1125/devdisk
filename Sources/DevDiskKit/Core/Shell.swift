@@ -8,9 +8,10 @@ struct CommandResult {
     /// this from a plain non-zero exit lets callers say "timed out" instead of
     /// reporting a misleading failure.
     var timedOut: Bool = false
+    var cancelled: Bool = false
 
     var text: String { String(data: stdout, encoding: .utf8) ?? "" }
-    var ok: Bool { exitCode == 0 && !timedOut }
+    var ok: Bool { exitCode == 0 && !timedOut && !cancelled }
 }
 
 /// Per-command deadlines. `diskutil eject` either succeeds or names a dissenter
@@ -34,7 +35,9 @@ enum CommandError: Error, LocalizedError {
     }
 }
 
-protocol CommandRunner {
+protocol CommandRunner: Sendable {
+    func run(_ path: String, _ args: [String], timeout: TimeInterval,
+             cancellation: CancellationToken?) throws -> CommandResult
     @discardableResult
     func run(_ path: String, _ args: [String]) throws -> CommandResult
 
@@ -45,6 +48,11 @@ protocol CommandRunner {
 }
 
 extension CommandRunner {
+    func run(_ path: String, _ args: [String], timeout: TimeInterval,
+             cancellation: CancellationToken?) throws -> CommandResult {
+        try cancellation?.check()
+        return try run(path, args, timeout: timeout)
+    }
     @discardableResult
     func run(_ path: String, _ args: [String],
              timeout: TimeInterval) throws -> CommandResult {
@@ -92,88 +100,76 @@ struct SystemCommandRunner: CommandRunner {
         try run(path, args, timeout: timeout)
     }
 
-    /// Runs a child process under a hard deadline.
-    ///
-    /// The previous version sent SIGTERM on timeout and then called
-    /// `waitUntilExit()` unconditionally — which blocks forever if the child does
-    /// not die. `diskutil` waiting on `diskarbitrationd` does exactly that, and it
-    /// hung the whole eject flow with the UI stuck on "正在安全弹出" and no way for
-    /// the user to know why. This escalates SIGTERM → SIGKILL and, if even that
-    /// fails, gives up and returns rather than blocking the caller.
-    func run(_ path: String, _ args: [String],
-             timeout deadline: TimeInterval) throws -> CommandResult {
+    func run(_ path: String, _ args: [String], timeout: TimeInterval) throws -> CommandResult {
+        try run(path, args, timeout: timeout, cancellation: nil)
+    }
+
+    /// Nonblocking pipe reads cannot strand reader threads when a grandchild keeps
+    /// a write end open. Deadlines use monotonic time, independent of wall-clock changes.
+    func run(_ path: String, _ args: [String], timeout: TimeInterval,
+             cancellation: CancellationToken?) throws -> CommandResult {
+        try cancellation?.check()
         guard FileManager.default.isExecutableFile(atPath: path) else {
             throw CommandError.notFound(path)
         }
-
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
         proc.arguments = args
-
         let out = Pipe(), err = Pipe()
         proc.standardOutput = out
         proc.standardError = err
-
         do { try proc.run() } catch { throw CommandError.launchFailed(path, error) }
-
-        // Drain both pipes off-thread; a full pipe buffer would otherwise deadlock
-        // against process exit for anything verbose (lsof, system_profiler). The
-        // box is lock-protected because the two reads run concurrently.
-        let box = OutputBox()
-        let group = DispatchGroup()
-        for (pipe, isStdout) in [(out, true), (err, false)] {
-            group.enter()
-            DispatchQueue.global().async {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                box.set(data, stdout: isStdout)
-                group.leave()
+        let handles = [out.fileHandleForReading, err.fileHandleForReading]
+        for handle in handles {
+            let fd = handle.fileDescriptor
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        }
+        defer { handles.forEach { try? $0.close() } }
+        var data = [Data(), Data()]
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        func drain() {
+            for i in handles.indices {
+                // Bound each drain so a continuously writing process cannot starve cancellation.
+                for _ in 0..<16 {
+                    let count = read(handles[i].fileDescriptor, &buffer, buffer.count)
+                    if count <= 0 { break }
+                    data[i].append(contentsOf: buffer.prefix(count))
+                }
             }
         }
-
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         var timedOut = false
-        if group.wait(timeout: .now() + deadline) == .timedOut {
-            timedOut = true
-            proc.terminate()                                   // SIGTERM
-            if group.wait(timeout: .now() + 2) == .timedOut {
-                kill(proc.processIdentifier, SIGKILL)          // then SIGKILL
-                _ = group.wait(timeout: .now() + 2)
+        var cancelled = false
+        while proc.isRunning {
+            drain()
+            cancelled = cancellation?.isCancelled == true
+            timedOut = ProcessInfo.processInfo.systemUptime >= deadline
+            if cancelled || timedOut { break }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if proc.isRunning {
+            proc.terminate()
+            let grace = ProcessInfo.processInfo.systemUptime + 0.3
+            while proc.isRunning && ProcessInfo.processInfo.systemUptime < grace {
+                drain(); Thread.sleep(forTimeInterval: 0.01)
+            }
+            if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+            let reap = ProcessInfo.processInfo.systemUptime + 2
+            while proc.isRunning && ProcessInfo.processInfo.systemUptime < reap {
+                drain(); Thread.sleep(forTimeInterval: 0.01)
             }
         }
-
-        // Never `waitUntilExit()` — it has no bound. Poll instead, and return even
-        // if the process somehow outlives SIGKILL (an uninterruptible kernel wait),
-        // so a wedged child can never take the app down with it.
-        let reapBy = Date().addingTimeInterval(2)
-        while proc.isRunning && Date() < reapBy {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-
-        return CommandResult(
-            stdout: box.stdout,
-            stderr: String(data: box.stderr, encoding: .utf8) ?? "",
-            exitCode: proc.isRunning ? -1 : proc.terminationStatus,
-            timedOut: timedOut
-        )
+        drain()
+        return CommandResult(stdout: data[0], stderr: String(decoding: data[1], as: UTF8.self),
+                             exitCode: proc.isRunning ? -1 : proc.terminationStatus,
+                             timedOut: timedOut, cancelled: cancelled)
     }
-}
-
-/// Collects the two pipe reads, which land on different threads.
-private final class OutputBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var out = Data()
-    private var err = Data()
-
-    func set(_ data: Data, stdout: Bool) {
-        lock.lock(); defer { lock.unlock() }
-        if stdout { out = data } else { err = data }
-    }
-    var stdout: Data { lock.lock(); defer { lock.unlock() }; return out }
-    var stderr: Data { lock.lock(); defer { lock.unlock() }; return err }
 }
 
 /// Returns canned output keyed by "<basename> <args joined>", and records every
 /// invocation so tests can assert on the exact command sequence.
-final class MockCommandRunner: CommandRunner {
+/// Test-only runner, configured before use and confined to a single test operation.
+final class MockCommandRunner: CommandRunner, @unchecked Sendable {
     private(set) var calls: [(path: String, args: [String])] = []
     var responses: [String: CommandResult] = [:]
     var fallback = CommandResult(stdout: Data(), stderr: "", exitCode: 0)

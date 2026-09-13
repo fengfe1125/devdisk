@@ -12,8 +12,9 @@ struct DiscoveredVolume: Identifiable, Equatable {
     var isBoot: Bool
     var totalBytes: Int64
     var freeBytes: Int64
+    var volumeUUID: String = ""
 
-    var id: String { mountPoint }
+    var id: String { volumeUUID.isEmpty ? deviceIdentifier + mountPoint : volumeUUID }
 
     /// What the drive picker should offer: a real external drive, not the boot
     /// volume and not a mounted installer image.
@@ -34,26 +35,27 @@ struct VolumeDiscovery {
         self.runner = runner
     }
 
-    /// Mount points of everything currently mounted, including "/".
-    func mountedPaths(fm: FileManager = .default) -> [String] {
-        let urls = fm.mountedVolumeURLs(
-            includingResourceValuesForKeys: nil,
-            options: [.skipHiddenVolumes]) ?? []
-        // Volume names can carry trailing spaces ("NIKON Z 6  " on an ExFAT camera
-        // card), so paths are used exactly as reported — never trimmed.
-        return urls.map(\.path)
+    func result() -> ProbeResult<[DiscoveredVolume]> {
+        var found: [DiscoveredVolume] = []
+        var issues: [String] = []
+        let paths: [String]
+        do { paths = try MountTable.paths() }
+        catch { return .init(state: .unavailable, issues: [error.localizedDescription]) }
+        for path in paths {
+            do {
+                let r = try runner.run(Tool.diskutil, ["info", "-plist", path], timeout: Deadline.quick)
+                try r.requireSuccess("diskutil info")
+                guard let d = VolumeProbe.plist(r.stdout), let volume = Self.parse(d, fallbackMountPoint: path) else {
+                    throw ProbeFailure("卷信息无法解析")
+                }
+                if volume.isSelectableDrive { found.append(volume) }
+            } catch { issues.append(error.localizedDescription) }
+        }
+        return .init(value: found.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+                     state: issues.isEmpty ? .complete : .partial, issues: issues)
     }
 
-    func discover() -> [DiscoveredVolume] {
-        mountedPaths().compactMap { path in
-            guard let r = try? runner.run(Tool.diskutil, ["info", "-plist", path],
-                                          timeout: Deadline.quick),
-                  r.ok,
-                  let d = VolumeProbe.plist(r.stdout)
-            else { return nil }
-            return Self.parse(d, fallbackMountPoint: path)
-        }
-    }
+    func discover() -> [DiscoveredVolume] { result().value ?? [] }
 
     /// External drives only, sorted for a stable list.
     func drives() -> [DiscoveredVolume] {
@@ -80,7 +82,8 @@ struct VolumeDiscovery {
             isDiskImage: bus == "Disk Image",
             isBoot: mount == "/",
             totalBytes: cap.total,
-            freeBytes: cap.free
+            freeBytes: cap.free,
+            volumeUUID: d["VolumeUUID"] as? String ?? ""
         )
     }
 

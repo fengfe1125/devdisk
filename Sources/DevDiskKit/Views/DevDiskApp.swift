@@ -24,6 +24,13 @@ public struct DevDiskApp: App {
         // The window fits its content: each screen has a very different natural
         // height, and a fixed size left the short ones mostly empty.
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .windowArrangement) {
+                if Bundle.main.object(forInfoDictionaryKey: "DevDiskDemoScenario") != nil {
+                    Button("验收：打开菜单栏面板") { appDelegate.statusBar.showPanel() }
+                }
+            }
+        }
 
         Settings {
             SettingsView()
@@ -40,15 +47,29 @@ final class DevDiskAppDelegate: NSObject, NSApplicationDelegate {
     let statusBar: StatusBarController
 
     override init() {
-        let store = DiskStore()
-        let updates = UpdateChecker()
+        let demo = Bundle.main.object(forInfoDictionaryKey: "DevDiskDemoScenario") as? String
+        let store = demo.map { DemoFixture.makeStore(scenario: $0) } ?? DiskStore()
+        let updateDefaults = demo == nil ? UserDefaults.standard : UserDefaults(suiteName: "devdisk.demo.updates")!
+        if demo != nil { updateDefaults.set(false, forKey: "updateCheckEnabled") }
+        let updates = UpdateChecker(defaults: updateDefaults)
         self.store = store
         self.updates = updates
         self.statusBar = StatusBarController(store: store, updates: updates)
         super.init()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard store.operation.locksTarget else { return .terminateNow }
+        // A menu/keyboard quit must not bypass the operation lock. Before commit,
+        // stop subsequent work first; after commit, wait for the system result.
+        store.cancelEject()
+        return .terminateCancel
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let appearance = Bundle.main.object(forInfoDictionaryKey: "DevDiskDemoAppearance") as? String {
+            NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+        }
         statusBar.install()
     }
 }

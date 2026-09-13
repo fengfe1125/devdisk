@@ -10,6 +10,7 @@ import Foundation
 struct DiskImage: Equatable {
     var path: String
     var writable: Bool
+    var accessKnown: Bool = true
     /// `/dev/diskN` entries, used to detach.
     var devEntries: [String]
     /// Mount points, empty when the image is attached but not mounted.
@@ -36,7 +37,10 @@ struct DiskImageProbe {
     func images(on mountPoint: String) throws -> [DiskImage] {
         let r = try runner.run(Tool.hdiutil, ["info", "-plist"],
                                timeout: Deadline.quick)
-        guard r.ok else { return [] }
+        try r.requireSuccess("hdiutil")
+        guard let root = VolumeProbe.plist(r.stdout), root["images"] is [[String: Any]] else {
+            throw ProbeFailure("hdiutil 输出无法解析")
+        }
         return Self.parse(r.stdout, under: mountPoint)
     }
 
@@ -56,7 +60,8 @@ struct DiskImageProbe {
             let entities = img["system-entities"] as? [[String: Any]] ?? []
             return DiskImage(
                 path: path,
-                writable: img["writeable"] as? Bool ?? false,
+                writable: img["writeable"] as? Bool ?? true,
+                accessKnown: img["writeable"] is Bool,
                 devEntries: entities.compactMap { $0["dev-entry"] as? String },
                 mountPoints: entities.compactMap { $0["mount-point"] as? String }
                     .filter { !$0.isEmpty }
