@@ -5,7 +5,11 @@
 
 macOS 菜单栏里的外置开发盘助手：查看状态、核对占用、按确认范围安全弹出。
 
+A macOS menu bar app for external development drives: see what is holding the disk, then eject it safely.
+
 </div>
+
+**为什么需要它**：Gradle daemon、Kotlin compile daemon、adb、Xcode 都会长期持有盘上的文件。强制推出或直接拔线会截断正在写入的构建缓存，事后表现为莫名其妙的构建失败——而且不会立刻报错，你会以为是代码问题。
 
 ## 1.1.0：可信检测与弹出影响预览
 
