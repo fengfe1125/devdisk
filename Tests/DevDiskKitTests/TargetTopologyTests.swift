@@ -39,7 +39,10 @@ final class TargetTopologyTests: XCTestCase {
         XCTAssertThrowsError(try probe.target(at: mount, runner: runner))
         data["BusProtocol"] = "USB"; data["APFSContainerReference"] = "disk91"
         runner.stub("diskutil info -plist " + mount, data: try plist(data))
-        runner.stub("diskutil info -plist disk91", data: try plist(["APFSPhysicalStores": [["APFSPhysicalStore": "disk90s1"], ["APFSPhysicalStore": "disk92s1"]]]))
+        runner.stub("diskutil list -plist", data: try plist(["AllDisksAndPartitions": [[
+            "DeviceIdentifier": "disk91",
+            "APFSPhysicalStores": [["DeviceIdentifier": "disk90s1"], ["DeviceIdentifier": "disk92s1"]]
+        ]]]))
         XCTAssertThrowsError(try probe.target(at: mount, runner: runner))
     }
     func testSystemVolumeOnSameDiskPreventsEject() throws {
@@ -53,6 +56,40 @@ final class TargetTopologyTests: XCTestCase {
         let target = FakeTargetInspector().current
         let probe = SystemTargetInspector(mountedPaths: { [] })
         XCTAssertThrowsError(try probe.isEjected(target, runner: MockCommandRunner()))
+        let result = probe.ejectVerification(target, runner: MockCommandRunner(), timeout: 1)
+        XCTAssertEqual(result.state, .unavailable)
+        XCTAssertNil(result.physicalDiskPresent)
+        XCTAssertTrue(result.relatedMountsKnown)
+        XCTAssertNotNil(result.issue)
+    }
+    func testStructuredVerificationRequiresDiskAbsentAndEveryRelatedVolumeUnmounted() throws {
+        let target = FakeTargetInspector().current
+        let runner = MockCommandRunner()
+        runner.stub("diskutil list -plist", data: try plist(["AllDisks": ["disk0", "disk90"]]))
+        let present = SystemTargetInspector(mountedPaths: { [FlowHarness.mount] })
+            .ejectVerification(target, runner: runner, timeout: 1)
+        XCTAssertEqual(present.state, .present)
+        XCTAssertEqual(present.physicalDiskPresent, true)
+        XCTAssertEqual(present.mountedVolumes, target.affected)
+
+        runner.stub("diskutil list -plist", data: try plist(["AllDisks": ["disk0"]]))
+        let residualMount = SystemTargetInspector(mountedPaths: { [FlowHarness.mount] })
+            .ejectVerification(target, runner: runner, timeout: 1)
+        XCTAssertEqual(residualMount.state, .present)
+        XCTAssertEqual(residualMount.physicalDiskPresent, false)
+
+        runner.stub("diskutil list -plist", data: try plist(["AllDisks": ["disk0", "disk90"]]))
+        let softwareEjected = SystemTargetInspector(mountedPaths: { [] })
+            .ejectVerification(target, runner: runner, timeout: 1)
+        XCTAssertEqual(softwareEjected.state, .unmounted)
+        XCTAssertFalse(softwareEjected.confirmedOffline)
+
+        runner.stub("diskutil list -plist", data: try plist(["AllDisks": ["disk0"]]))
+        let offline = SystemTargetInspector(mountedPaths: { [] })
+            .ejectVerification(target, runner: runner, timeout: 1)
+        XCTAssertEqual(offline.state, .offline)
+        XCTAssertTrue(offline.confirmedOffline)
+        XCTAssertTrue(offline.mountedVolumes.isEmpty)
     }
     func testReadOnlyRealTargetWhenExplicitlyConfigured() throws {
         guard let mount = ProcessInfo.processInfo.environment["DEVDISK_READONLY_TARGET"] else {

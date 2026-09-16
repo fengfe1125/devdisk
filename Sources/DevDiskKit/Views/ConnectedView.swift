@@ -26,7 +26,11 @@ struct ConnectedView: View {
         if let snap = store.snapshot {
             VStack(alignment: .leading, spacing: 0) {
                 if let failure = store.ejectFailure {
-                    EjectFailureBanner(message: failure) { store.dismissEjectFailure() }
+                    EjectFailureBanner(message: failure,
+                                       pending: store.ejectVerificationPending,
+                                       onRecheck: { store.reverifyEject() }) {
+                        store.dismissEjectFailure()
+                    }
                     if let diagnostic = store.ejectDiagnostic {
                         EjectFailureDetails(failure: diagnostic).padding(.horizontal, UI.hPad).padding(.bottom, 10)
                     }

@@ -69,15 +69,26 @@ struct VolumeProbe {
     /// never appears in system_profiler. The physical device (disk6) is reached through
     /// the container's physical store (disk6s2) with its partition suffix stripped.
     func physicalDisk(container: String) throws -> String? {
-        let r = try runner.run(Tool.diskutil, ["info", "-plist", container])
+        // `diskutil info` on a synthesized APFS container can stall until our command
+        // deadline on macOS 27. The list plist carries the same store mapping without
+        // opening the synthesized device for inspection.
+        let r = try runner.run(Tool.diskutil, ["list", "-plist"])
         guard r.ok, let d = Self.plist(r.stdout) else { return nil }
-        return Self.parsePhysicalDisk(d)
+        return Self.parsePhysicalDisk(d, container: container)
+    }
+
+    static func parsePhysicalDisk(_ root: [String: Any], container: String) -> String? {
+        guard let entries = root["AllDisksAndPartitions"] as? [[String: Any]],
+              let match = entries.first(where: { $0["DeviceIdentifier"] as? String == container })
+        else { return nil }
+        return parsePhysicalDisk(match)
     }
 
     static func parsePhysicalDisk(_ d: [String: Any]) -> String? {
         guard let stores = d["APFSPhysicalStores"] as? [[String: Any]],
               stores.count == 1,
-              let store = stores.first?["APFSPhysicalStore"] as? String
+              let store = (stores.first?["APFSPhysicalStore"] as? String)
+                ?? (stores.first?["DeviceIdentifier"] as? String)
         else { return nil }
         return wholeDisk(from: store)
     }

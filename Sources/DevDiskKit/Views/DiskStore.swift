@@ -25,7 +25,9 @@ final class DiskStore: ObservableObject {
     @Published var lastError: Message?
     @Published var ejectFailure: Message?
     @Published var ejectDiagnostic: EjectFailure?
+    @Published var ejectVerificationPending = false
     @Published var lastEjectSummary: Message?
+    @Published var lastEjectVerification: Message?
     @Published var ejectPlan: EjectPlan?
     @Published var waitingForSystem = false
     @Published private var verifiedEjected: Screen?
@@ -158,6 +160,10 @@ final class DiskStore: ObservableObject {
 
     func refresh(force: Bool = false) {
         guard !operation.locksTarget else { return }
+        if ejectVerificationPending, ejectDiagnostic != nil {
+            reverifyEject()
+            return
+        }
         if force { cache.removeAll() }
         if refreshActive { pendingRefresh = pendingRefresh || force; return }
         refreshActive = true
@@ -222,6 +228,11 @@ final class DiskStore: ObservableObject {
         mountPoint = chosen.mountPoint
         mounted = true
         verifiedEjected = nil
+        if ejectVerificationPending,
+           chosen.volumeUUID == ejectDiagnostic?.target.volume.uuid {
+            ejectVerificationPending = false
+            ejectFailure = M("diskstore.target.reconnected.after.pending.eject")
+        }
         if screen == .disconnected || screen == .drives { screen = .connected }
         if case .ejected = screen { screen = .connected }
     }
@@ -350,6 +361,8 @@ final class DiskStore: ObservableObject {
         invalidateScans()
         operation = .preflight; screen = .ejecting
         ejectPlan = nil; ejectFailure = nil; lastError = nil; waitingForSystem = false
+        ejectVerificationPending = false
+        lastEjectVerification = nil
         if previous == nil { ejectDiagnostic = nil }
         ejectSteps = [.init(id: "scan", title: M("diskstore.read.only.preflight.verify.target.and.open.files"), state: .running)]
         let token = CancellationToken()
@@ -396,6 +409,12 @@ final class DiskStore: ObservableObject {
                 self.ejectDiagnostic = failure
             }
         }
+        flow.onVerifiedEject = { [weak self] detail in
+            Task { @MainActor in
+                guard let self, self.operationToken === token else { return }
+                self.lastEjectVerification = detail
+            }
+        }
     }
     func confirmEject(systemOnly: Bool = false) {
         guard operation == .awaitingConfirmation, let plan = ejectPlan,
@@ -405,6 +424,22 @@ final class DiskStore: ObservableObject {
         wire(flow, token: token)
         ejectQueue.async { [weak self] in
             let outcome = flow.execute(plan, systemOnly: systemOnly)
+            Task { @MainActor in self?.receive(outcome, token: token) }
+        }
+    }
+    func reverifyEject() {
+        guard !operation.locksTarget, let previous = ejectDiagnostic,
+              ejectVerificationPending else { return }
+        invalidateScans()
+        let token = CancellationToken()
+        operationToken = token
+        operation = .executing
+        screen = .ejecting
+        waitingForSystem = true
+        let flow = makeFlow(runner, previous.target.volume.mount, token)
+        wire(flow, token: token)
+        ejectQueue.async { [weak self] in
+            let outcome = flow.reverify(previous)
             Task { @MainActor in self?.receive(outcome, token: token) }
         }
     }
@@ -434,19 +469,31 @@ final class DiskStore: ObservableObject {
             waitingForSystem = false
         case .ejected(let duration, let apps, let daemons):
             operation = .finished; screen = .ejected(duration, apps: apps, daemons: daemons)
+            waitingForSystem = false
+            ejectVerificationPending = false
+            ejectFailure = nil
             verifiedEjected = screen
             mounted = false; snapshot = nil; directories = []; occupancy = nil; ejectPlan = nil
             cache.removeAll()
             lastEjectSummary = Self.summary(duration, apps: apps, daemons: daemons)
         case .aborted(let why):
-            operation = .finished; screen = .connected; ejectFailure = why; ejectPlan = nil
+            operation = .finished; screen = .connected; waitingForSystem = false
+            ejectFailure = why; ejectPlan = nil
             refresh()
+        case .verificationPending(let failure, let why):
+            operation = .finished; screen = .connected; waitingForSystem = false
+            ejectVerificationPending = true
+            ejectDiagnostic = failure; ejectFailure = why; ejectPlan = nil
         }
     }
     nonisolated static func summary(_ duration: TimeInterval, apps: Int, daemons: Int) -> Message {
         M("diskstore.time.s.apps.confirmed.quit.service.processes.stopped", Message.number(duration, decimals: 1), apps, daemons)
     }
-    func dismissEjectFailure() { ejectFailure = nil; ejectDiagnostic = nil }
+    func dismissEjectFailure() {
+        ejectFailure = nil
+        ejectDiagnostic = nil
+        ejectVerificationPending = false
+    }
     func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
     func openSettings(_ url: String) { if let u = URL(string: url) { NSWorkspace.shared.open(u) } }
     func quit() { guard !operation.locksTarget else { return }; NSApplication.shared.terminate(nil) }

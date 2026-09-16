@@ -22,6 +22,7 @@ final class FlowHarness: CommandRunner, @unchecked Sendable {
         flow.inspector = processes
         flow.targets = targetInspector
         flow.now = { self.clock }
+        flow.monotonicNow = { self.clock.timeIntervalSince1970 }
         flow.sleep = { self.clock += $0 }
         flow.quitTimeout = 0.3
         return flow
@@ -97,15 +98,36 @@ final class FakeTargetInspector: TargetInspecting {
     var current = EjectTarget(volume: .init(name: "ReviewDisk", mount: FlowHarness.mount, device: "disk90s1", uuid: "review-uuid"),
                              physicalDisk: "disk90", affected: [.init(name: "ReviewDisk", mount: FlowHarness.mount, device: "disk90s1", uuid: "review-uuid")])
     var gone = false
+    var ejectedResults: [Bool] = []
+    var verificationResults: [EjectVerification] = []
     var verifyError = false
+    var verificationReads = 0
     var reads = 0
     var beforeRead: (() -> Void)?
     func target(at mount: String, runner: CommandRunner) throws -> EjectTarget {
         reads += 1; beforeRead?()
         return current
     }
-    func isEjected(_ target: EjectTarget, runner: CommandRunner) throws -> Bool {
-        if verifyError { throw ProbeFailure("verification unavailable") }
-        return gone
+    func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
+                           timeout: TimeInterval) -> EjectVerification {
+        verificationReads += 1
+        if verifyError {
+            return .init(state: .unavailable, physicalDiskPresent: nil,
+                         mountedVolumes: [], relatedMountsKnown: false,
+                         issue: "verification unavailable")
+        }
+        if !verificationResults.isEmpty {
+            return verificationResults.removeFirst()
+        }
+        let result: Bool
+        if !ejectedResults.isEmpty {
+            let next = ejectedResults.removeFirst()
+            if ejectedResults.isEmpty { gone = next }
+            result = next
+        } else { result = gone }
+        return .init(state: result ? .offline : .present,
+                     physicalDiskPresent: !result,
+                     mountedVolumes: result ? [] : target.affected,
+                     relatedMountsKnown: true, issue: nil)
     }
 }

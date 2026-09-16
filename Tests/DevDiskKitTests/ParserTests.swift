@@ -77,6 +77,11 @@ final class VolumeParsingTests: XCTestCase {
         // ParentWholeDisk names the synthesized container, which is the trap.
         XCTAssertEqual(d["ParentWholeDisk"] as? String, "disk7")
         XCTAssertEqual(VolumeProbe.parsePhysicalDisk(d), "disk6")
+        let list: [String: Any] = ["AllDisksAndPartitions": [[
+            "DeviceIdentifier": "disk7",
+            "APFSPhysicalStores": [["DeviceIdentifier": "disk6s2"]]
+        ]]]
+        XCTAssertEqual(VolumeProbe.parsePhysicalDisk(list, container: "disk7"), "disk6")
     }
 
     func testWholeDiskStripsPartitionSuffix() {

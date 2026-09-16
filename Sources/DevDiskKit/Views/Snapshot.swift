@@ -74,6 +74,7 @@ public enum Snapshot {
             return true
         case .aborted(let why): print("中止：\(why.text)"); return false
         case .preview: return false
+        case .verificationPending(_, let why): print("待确认：\(why.text)"); return false
         }
     }
 

@@ -20,8 +20,10 @@ struct PanelView: View {
     /// (they come out blank).
     enum Presentation { case popover, window, snapshot }
     var presentation: Presentation = .popover
+    var onClose: () -> Void = {}
 
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @AppStorage(PanelSetting.version) private var showVersion = true
 
     /// Natural height of the scrolling content, measured so the popover can be sized
@@ -111,8 +113,19 @@ struct PanelView: View {
         case .settings:     SettingsFooter()
         case .drives:       DrivePickerFooter()
         case .ejecting:     EjectingFooter()
-        case .ejected:      EjectedFooter()
+        case .ejected:      EjectedFooter(onDone: closeAfterEject)
         case .disconnected: DisconnectedFooter()
+        }
+    }
+
+    private func closeAfterEject() {
+        switch presentation {
+        case .popover:
+            onClose()
+        case .window:
+            dismissWindow(id: DiskStore.mainWindowID)
+        case .snapshot:
+            break
         }
     }
 
@@ -333,11 +346,18 @@ struct EjectedView: View {
                 title: L("panelview.safe.to.unplug"),
                 message: AnyView(
                     VStack(spacing: 3) {
-                        Text(L("panelview.physical.disk.offline.related.volumes.unmounted"))
+                        Text(store.lastEjectVerification
+                             ?? M("panelview.physical.disk.offline.related.volumes.unmounted"))
                         if let s = store.lastEjectSummary { Text(s) }
                     }
                 )
             )
+            if let diagnostic = store.ejectDiagnostic {
+                EjectFailureDetails(failure: diagnostic,
+                                    title: L("panelview.previous.pending.eject.details"))
+                    .padding(.horizontal, UI.hPad)
+                    .padding(.bottom, 14)
+            }
         }
     }
 }
@@ -345,10 +365,10 @@ struct EjectedView: View {
 /// Pinned action area after a successful eject.
 struct EjectedFooter: View {
     @ObservedObject private var language = LanguageStore.shared
-    @EnvironmentObject var store: DiskStore
+    let onDone: () -> Void
 
     var body: some View {
-        PrimaryButton(title: L("panelview.ok")) { store.refresh(force: true) }
+        PrimaryButton(title: L("panelview.ok"), action: onDone)
             .padding(.horizontal, UI.hPad)
             .padding(.vertical, 11)
     }

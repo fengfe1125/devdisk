@@ -61,6 +61,51 @@ final class StoreReliabilityTests: XCTestCase {
         XCTAssertNil(store.ejectFailure)
     }
 
+    func testPendingEjectCanBeReverifiedWithoutRepeatingTheSystemRequest() async {
+        let h = FlowHarness()
+        h.failures["diskutil eject disk90"] = .init(stdout: Data("Disk disk90 ejected\n".utf8),
+                                                     stderr: "", exitCode: 0)
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        let disk = drive("ReviewDisk", uuid: "review-uuid")
+        store.applyDiscovery([disk])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+
+        store.eject()
+        await wait(store, for: .finished)
+        XCTAssertTrue(store.ejectVerificationPending)
+        XCTAssertEqual(store.ejectDiagnostic?.stage, "verify")
+
+        h.targetInspector.gone = true
+        store.reverifyEject()
+        await wait(store, for: .finished)
+        guard case .ejected = store.screen else { return XCTFail("later verification must show success") }
+        XCTAssertFalse(store.ejectVerificationPending)
+        XCTAssertNil(store.ejectFailure)
+        XCTAssertEqual(store.lastEjectVerification,
+                       M("ejectflow.physical.disk.offline.related.volumes.unmounted"))
+        XCTAssertEqual(h.calls.filter { $0 == "diskutil eject disk90" }.count, 1)
+    }
+
+    func testReconnectEndsPendingVerificationWithoutApplyingTheOldResult() async {
+        let h = FlowHarness()
+        h.failures["diskutil eject disk90"] = .init(stdout: Data("Disk disk90 ejected\n".utf8),
+                                                     stderr: "", exitCode: 0)
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        let disk = drive("ReviewDisk", uuid: "review-uuid")
+        store.applyDiscovery([disk])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+
+        store.eject()
+        await wait(store, for: .finished)
+        XCTAssertTrue(store.ejectVerificationPending)
+
+        store.applyDiscovery([disk])
+        XCTAssertFalse(store.ejectVerificationPending)
+        XCTAssertTrue(store.ejectFailure?.render(.chinese).contains("重新连接") == true)
+        XCTAssertTrue(store.isMounted)
+        XCTAssertEqual(store.screen, .connected)
+    }
+
     private func defaults() -> UserDefaults {
         let name = "devdisk.tests." + UUID().uuidString
         let d = UserDefaults(suiteName: name)!

@@ -171,16 +171,25 @@ final class EjectSafetyTests: XCTestCase {
         guard case .aborted = f.execute(p, systemOnly: false) else { return XCTFail("target changed") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("diskutil eject") })
     }
-    func testEjectSuccessWithoutVerificationDoesNotSaySafe() {
+    func testEjectSuccessWithoutVerificationStaysPendingAndDoesNotSaySafe() {
         let h = FlowHarness(); h.targetInspector.verifyError = true
-        guard case .aborted(let why) = h.flow.run(indexingOn: nil) else { return XCTFail("must not claim safe") }
-        XCTAssertTrue(why.render(.chinese).contains("未确认可拔线"))
+        let f = h.flow
+        guard case .verificationPending(let failure, let why) = f.run(indexingOn: nil) else {
+            return XCTFail("must remain pending")
+        }
+        XCTAssertTrue(why.render(.chinese).contains("待确认"))
+        XCTAssertEqual(failure.stage, "verify")
+        XCTAssertEqual(failure.verification?.state, .unavailable)
     }
-    func testEjectTimeoutWithDiskPresentIsUnknown() {
+    func testEjectTimeoutWithDiskPresentIsPending() {
         let h = FlowHarness()
         h.failures["diskutil eject disk90"] = .init(stdout: Data(), stderr: "", exitCode: -1, timedOut: true)
-        guard case .aborted(let why) = h.flow.run(indexingOn: nil) else { return XCTFail("unknown") }
-        XCTAssertTrue(why.render(.chinese).contains("结果未知"))
+        guard case .verificationPending(let failure, let why) = h.flow.run(indexingOn: nil) else {
+            return XCTFail("pending")
+        }
+        XCTAssertTrue(why.render(.chinese).contains("待确认"))
+        XCTAssertTrue(failure.commandTimedOut)
+        XCTAssertEqual(failure.verification?.state, .present)
     }
     func testEjectRefusalReportsDissenter() throws {
         let h = FlowHarness()

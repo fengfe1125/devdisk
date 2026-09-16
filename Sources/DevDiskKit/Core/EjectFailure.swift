@@ -10,6 +10,11 @@ struct EjectFailure: Equatable {
     let completedApps: Int
     let completedProcesses: Int
     let completedImages: Int
+    var commandExitCode: Int32? = nil
+    var commandTimedOut = false
+    var commandCancelled = false
+    var verificationDuration: TimeInterval? = nil
+    var verification: EjectVerification? = nil
 
     private var stageLabel: String {
         let keys = ["validate": "ejectflow.verify.target.and.scope", "apps": "ejectflow.request.apps.to.quit",
@@ -20,11 +25,21 @@ struct EjectFailure: Equatable {
     }
 
     var report: String {
-        [message.text, M("ejectfailure.volume", target.volume.name, target.volume.device).text,
+        var lines = [message.text, M("ejectfailure.volume", target.volume.name, target.volume.device).text,
          M("ejectfailure.disk", target.physicalDisk).text, M("ejectfailure.stage", stageLabel).text,
          M("ejectfailure.pid", blockingPID.map(String.init) ?? L("ejectfailure.unknown")).text,
-         M("ejectflow.apps.quit.service.processes.stopped.images.ejected.requests", completedApps, completedProcesses, completedImages).text,
-         commandOutput].filter { !$0.isEmpty }.joined(separator: "\n")
+         M("ejectflow.apps.quit.service.processes.stopped.images.ejected.requests", completedApps, completedProcesses, completedImages).text]
+        if let commandExitCode {
+            lines.append(M("ejectfailure.command.result", commandExitCode,
+                           commandTimedOut ? L("ejectfailure.yes") : L("ejectfailure.no"),
+                           commandCancelled ? L("ejectfailure.yes") : L("ejectfailure.no")).text)
+        }
+        if let verificationDuration {
+            lines.append(M("ejectfailure.verification.duration", Message.number(verificationDuration, decimals: 2)).text)
+        }
+        if let verification { lines.append(M("ejectfailure.last.verification", verification.detail).text) }
+        if !commandOutput.isEmpty { lines.append(commandOutput) }
+        return lines.joined(separator: "\n")
     }
 
     static func blockingPID(in text: String) -> Int32? {

@@ -54,6 +54,7 @@ final class EjectFlow: @unchecked Sendable {
         case ejected(TimeInterval, stoppedApps: Int, stoppedDaemons: Int)
         case aborted(Message)
         case preview(EjectPlan)
+        case verificationPending(EjectFailure, Message)
     }
 
     let runner: CommandRunner
@@ -65,11 +66,15 @@ final class EjectFlow: @unchecked Sendable {
     var quitTimeout: TimeInterval = 20
     var sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     var now: () -> Date = Date.init
+    var monotonicNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var verificationTimeout: TimeInterval = 10
+    var verificationInterval: TimeInterval = 0.25
     private(set) var steps: [Step] = []
     var onUpdate: ([Step]) -> Void = { _ in }
     var onCommit: () -> Void = {}
     var onSystemReturned: () -> Void = {}
     var onFailure: (EjectFailure) -> Void = { _ in }
+    var onVerifiedEject: (Message) -> Void = { _ in }
     private(set) var lastFailure: EjectFailure?
     private var requested: [ProcessIdentity: HolderKind] = [:]
     private var credited: Set<ProcessIdentity> = []
@@ -240,6 +245,45 @@ final class EjectFlow: @unchecked Sendable {
         } catch { return .aborted(error.displayMessage) }
     }
 
+    /// Rechecks only the post-eject state. It never sends another eject request or
+    /// repeats process actions, so a late Disk Arbitration update can safely repair
+    /// a previously pending result.
+    func reverify(_ previous: EjectFailure) -> Outcome {
+        stoppedApps = previous.completedApps
+        stoppedDaemons = previous.completedProcesses
+        detachedImages = previous.completedImages
+        lastCommandOutput = previous.commandOutput
+        steps = [Step(id: "verify", title: M("ejectflow.verify.eject.result"), state: .running)]
+        onUpdate(steps)
+        let started = now()
+        let commandSucceeded = previous.commandExitCode == 0
+            && !previous.commandTimedOut && !previous.commandCancelled
+        let (verification, duration) = waitForEject(previous.target,
+                                                    acceptUnmounted: commandSucceeded)
+        if confirmsEject(verification, acceptUnmounted: commandSucceeded) {
+            let detail = verification.state == .offline
+                ? M("ejectflow.physical.disk.offline.related.volumes.unmounted")
+                : M("ejectflow.system.eject.confirmed.related.volumes.unmounted")
+            set("verify", .done(detail))
+            onVerifiedEject(detail)
+            return .ejected(now().timeIntervalSince(started), stoppedApps: stoppedApps, stoppedDaemons: stoppedDaemons)
+        }
+        let reason = M("ejectflow.eject.result.pending.verification")
+        let updated = EjectFailure(target: previous.target, stage: "verify", message: reason,
+                                   commandOutput: previous.commandOutput,
+                                   blockingPID: previous.blockingPID,
+                                   completedApps: stoppedApps, completedProcesses: stoppedDaemons,
+                                   completedImages: detachedImages,
+                                   commandExitCode: previous.commandExitCode,
+                                   commandTimedOut: previous.commandTimedOut,
+                                   commandCancelled: previous.commandCancelled,
+                                   verificationDuration: duration, verification: verification)
+        lastFailure = updated
+        onFailure(updated)
+        set("verify", .failed(reason))
+        return .verificationPending(updated, reason + "\n" + completedDetail)
+    }
+
     private func previewOutcome(_ plan: EjectPlan, notice: Message? = nil) -> Outcome {
         var updated = plan
         updated.completedApps = stoppedApps
@@ -277,14 +321,47 @@ final class EjectFlow: @unchecked Sendable {
         if kind == .guiApp { stoppedApps += 1 } else { stoppedDaemons += 1 }
     }
 
-    private func recordFailure(_ target: EjectTarget, stage: String, message: Message, blockingPID: Int32? = nil) {
+    @discardableResult
+    private func recordFailure(_ target: EjectTarget, stage: String, message: Message,
+                               blockingPID: Int32? = nil, command: CommandResult? = nil,
+                               verification: EjectVerification? = nil,
+                               verificationDuration: TimeInterval? = nil) -> EjectFailure {
         let failure = EjectFailure(target: target, stage: stage, message: message,
-                                  commandOutput: String(lastCommandOutput.prefix(16_384)),
-                                  blockingPID: blockingPID ?? EjectFailure.blockingPID(in: lastCommandOutput),
-                                  completedApps: stoppedApps, completedProcesses: stoppedDaemons,
-                                  completedImages: detachedImages)
+                                   commandOutput: String(lastCommandOutput.prefix(16_384)),
+                                   blockingPID: blockingPID ?? EjectFailure.blockingPID(in: lastCommandOutput),
+                                   completedApps: stoppedApps, completedProcesses: stoppedDaemons,
+                                   completedImages: detachedImages,
+                                   commandExitCode: command?.exitCode,
+                                   commandTimedOut: command?.timedOut ?? false,
+                                   commandCancelled: command?.cancelled ?? false,
+                                   verificationDuration: verificationDuration,
+                                   verification: verification)
         lastFailure = failure
         onFailure(failure)
+        return failure
+    }
+
+    private func confirmsEject(_ verification: EjectVerification,
+                               acceptUnmounted: Bool) -> Bool {
+        verification.confirmedOffline
+            || (acceptUnmounted && verification.state == .unmounted)
+    }
+
+    private func waitForEject(_ target: EjectTarget,
+                              acceptUnmounted: Bool) -> (EjectVerification, TimeInterval) {
+        let started = monotonicNow()
+        let deadline = started + verificationTimeout
+        var latest = targets.ejectVerification(target, runner: runner,
+                                                timeout: max(0.05, min(Deadline.quick, verificationTimeout)))
+        while !confirmsEject(latest, acceptUnmounted: acceptUnmounted)
+                && monotonicNow() < deadline {
+            let delay = min(verificationInterval, deadline - monotonicNow())
+            if delay > 0 { sleep(delay) }
+            let remaining = max(0.05, deadline - monotonicNow())
+            latest = targets.ejectVerification(target, runner: runner,
+                                                timeout: min(Deadline.quick, remaining))
+        }
+        return (latest, max(0, monotonicNow() - started))
     }
 
     private func ejectWithRecovery(_ approved: EjectPlan, systemOnly: Bool, started: Date) throws -> Outcome {
@@ -298,21 +375,33 @@ final class EjectFlow: @unchecked Sendable {
             set("unmount", .running)
             let r = try runner.run(Tool.diskutil, ["eject", approved.target.physicalDisk], timeout: Deadline.eject)
             lastCommandOutput = r.text + "\n" + r.stderr
+            if r.ok { set("unmount", .done(M("ejectflow.macos.finished.the.eject.request"))) }
             set("verify", .running)
-            let gone = try targets.isEjected(approved.target, runner: runner)
-            if gone && (r.ok || r.timedOut) {
+            let (verification, verificationDuration) = waitForEject(approved.target,
+                                                                     acceptUnmounted: r.ok)
+            if confirmsEject(verification, acceptUnmounted: r.ok) {
                 set("unmount", .done(r.timedOut ? M("ejectflow.system.command.timed.out.but.the.disk.was") : M("ejectflow.macos.ejected.the.disk")))
-                set("verify", .done(M("ejectflow.physical.disk.offline.related.volumes.unmounted")))
+                let detail = verification.state == .offline
+                    ? M("ejectflow.physical.disk.offline.related.volumes.unmounted")
+                    : M("ejectflow.system.eject.confirmed.related.volumes.unmounted")
+                set("verify", .done(detail))
+                onVerifiedEject(detail)
                 return .ejected(now().timeIntervalSince(started), stoppedApps: stoppedApps, stoppedDaemons: stoppedDaemons)
             }
-            if r.timedOut || r.cancelled || r.ok || gone {
-                throw ProbeFailure(M("ejectflow.eject.result.unknown.disk.not.verified.offline.do"))
+            if r.timedOut || r.cancelled || r.ok {
+                let reason = M("ejectflow.eject.result.pending.verification")
+                let failure = recordFailure(approved.target, stage: "verify", message: reason,
+                                            command: r, verification: verification,
+                                            verificationDuration: verificationDuration)
+                set("verify", .failed(reason))
+                return .verificationPending(failure, reason + "\n" + completedDetail)
             }
             // A definite refusal has completed. It is now safe to cancel/reconfirm.
             cancellation.finishRefusedAttempt()
             onSystemReturned()
             let reason = Self.dissenterMessage(lastCommandOutput) ?? M("ejectflow.macos.refused.to.eject.the.disk")
-            recordFailure(approved.target, stage: "unmount", message: reason)
+            recordFailure(approved.target, stage: "unmount", message: reason, command: r,
+                          verification: verification, verificationDuration: verificationDuration)
             set("unmount", .failed(reason)); set("verify", .done(M("ejectflow.disk.still.connected")))
             let fresh = try prepare()
             guard fresh.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }

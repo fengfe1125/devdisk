@@ -453,6 +453,8 @@ struct LinkButton: View {
 struct EjectFailureBanner: View {
     @ObservedObject private var language = LanguageStore.shared
     let message: Message
+    var pending = false
+    var onRecheck: () -> Void = {}
     let onDismiss: () -> Void
 
     var body: some View {
@@ -463,13 +465,19 @@ struct EjectFailureBanner: View {
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(L("components.could.not.eject"))
+                Text(pending ? L("components.eject.pending.confirmation") : L("components.could.not.eject"))
                     .font(.system(size: 11.5, weight: .semibold))
                 Text(message)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                if pending {
+                    Button(L("components.recheck.eject.result"), action: onRecheck)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(.top, 4)
+                }
             }
 
             Spacer(minLength: 4)

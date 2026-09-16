@@ -13,7 +13,7 @@ import SwiftUI
 final class StatusBarController: NSObject {
     private let store: DiskStore
     private let updates: UpdateChecker
-    private let popover = NSPopover()
+    private let popover: NSPopover
     private let hostingController: NSHostingController<AnyView>
     private var statusItem: NSStatusItem?
     private var storeObservation: AnyCancellable?
@@ -22,7 +22,12 @@ final class StatusBarController: NSObject {
         self.store = store
         self.updates = updates
 
-        let panel = PanelView()
+        let popover = NSPopover()
+        self.popover = popover
+
+        let panel = PanelView(onClose: { [weak popover] in
+            popover?.performClose(nil)
+        })
             .environmentObject(store)
             .environmentObject(updates)
             .fixedSize(horizontal: false, vertical: true)

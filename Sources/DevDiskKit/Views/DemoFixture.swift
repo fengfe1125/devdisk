@@ -42,7 +42,12 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
         if !scenario.contains("running") && !scenario.contains("save") { live.removeValue(forKey: identity.pid) }
     }
     func target(at mount: String, runner: CommandRunner) throws -> EjectTarget { targetValue }
-    func isEjected(_ target: EjectTarget, runner: CommandRunner) throws -> Bool { gone }
+    func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
+                           timeout: TimeInterval) -> EjectVerification {
+        .init(state: gone ? .offline : .present, physicalDiskPresent: !gone,
+              mountedVolumes: gone ? [] : target.affected,
+              relatedMountsKnown: true, issue: nil)
+    }
     func run(_ path: String, _ args: [String]) throws -> CommandResult {
         func result(_ text: String, code: Int32 = 0) -> CommandResult {
             .init(stdout: Data(text.utf8), stderr: "", exitCode: code)

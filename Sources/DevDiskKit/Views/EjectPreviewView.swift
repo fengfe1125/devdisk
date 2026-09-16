@@ -114,10 +114,11 @@ struct EjectPreviewFooter: View {
 
 struct EjectFailureDetails: View {
     let failure: EjectFailure
+    var title: String = L("ejectpreviewview.failure.details")
     @EnvironmentObject var store: DiskStore
     @ObservedObject private var language = LanguageStore.shared
     var body: some View {
-        DisclosureGroup(L("ejectpreviewview.failure.details")) {
+        DisclosureGroup(title) {
             Text(failure.report).font(.system(size: 10, design: .monospaced))
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
             Button(L("ejectpreviewview.copy.failure")) { store.copy(failure.report) }

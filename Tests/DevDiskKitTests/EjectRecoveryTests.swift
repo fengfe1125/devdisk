@@ -103,6 +103,42 @@ final class EjectRecoveryTests: XCTestCase {
         XCTAssertEqual(attempts, 2)
     }
 
+    func testSuccessfulCommandWaitsForDelayedOfflineStateWithoutEjectingAgain() {
+        let h = FlowHarness()
+        h.targetInspector.ejectedResults = [false, false, true]
+        let f = h.flow
+
+        guard case .ejected = f.run(indexingOn: nil) else {
+            return XCTFail("a delayed disk registry update must not become an unknown failure")
+        }
+
+        XCTAssertEqual(h.targetInspector.verificationReads, 3)
+        XCTAssertEqual(h.calls.filter { $0 == eject }.count, 1)
+        XCTAssertEqual(h.clock.timeIntervalSince1970, 1000.5, accuracy: 0.001)
+        XCTAssertEqual(f.steps.first(where: { $0.id == "verify" })?.state,
+                       .done(M("ejectflow.physical.disk.offline.related.volumes.unmounted")))
+    }
+
+    func testSuccessfulSystemEjectAcceptsUnmountedFixedExternalDevice() {
+        let h = FlowHarness()
+        h.targetInspector.verificationResults = [
+            .init(state: .unmounted, physicalDiskPresent: true, mountedVolumes: [],
+                  relatedMountsKnown: true, issue: nil)
+        ]
+        let f = h.flow
+        var verified: Message?
+        f.onVerifiedEject = { verified = $0 }
+
+        guard case .ejected = f.run(indexingOn: nil) else {
+            return XCTFail("fixed external devices remain enumerated after a successful eject")
+        }
+        XCTAssertEqual(h.calls.filter { $0 == eject }.count, 1)
+        XCTAssertEqual(h.targetInspector.verificationReads, 1)
+        XCTAssertEqual(f.steps.first(where: { $0.id == "verify" })?.state,
+                       .done(M("ejectflow.system.eject.confirmed.related.volumes.unmounted")))
+        XCTAssertEqual(verified, M("ejectflow.system.eject.confirmed.related.volumes.unmounted"))
+    }
+
     func testBusyRetryIsBoundedAndRetainsRawDiagnostic() {
         let h = FlowHarness(); h.failures[eject] = busy
         let f = h.flow
@@ -163,13 +199,38 @@ final class EjectRecoveryTests: XCTestCase {
     }
 
     func testPermissionTimeoutAndUnknownResultsNeverRetry() {
-        for result in [CommandResult(stdout: Data(), stderr: "Permission denied: resource busy", exitCode: 1),
+        let results = [CommandResult(stdout: Data(), stderr: "Permission denied: resource busy", exitCode: 1),
                        .init(stdout: Data(), stderr: "Resource busy", exitCode: -1, timedOut: true),
-                       .init(stdout: Data(), stderr: "", exitCode: 0)] {
+                       .init(stdout: Data(), stderr: "", exitCode: 0)]
+        for (index, result) in results.enumerated() {
             let h = FlowHarness(); h.failures[eject] = result
-            guard case .aborted = h.flow.run(indexingOn: nil) else { XCTFail("must stop"); continue }
+            let outcome = h.flow.run(indexingOn: nil)
+            if index == 0 {
+                guard case .aborted = outcome else { XCTFail("permission refusal must stop"); continue }
+            } else {
+                guard case .verificationPending = outcome else { XCTFail("uncertain result must remain pending"); continue }
+            }
             XCTAssertEqual(h.calls.filter { $0 == eject }.count, 1)
         }
+    }
+
+    func testReadOnlyReverificationRepairsPendingResultWithoutAnotherEject() throws {
+        let h = FlowHarness()
+        h.failures[eject] = .init(stdout: Data("Disk disk90 ejected\n".utf8), stderr: "", exitCode: 0)
+        let first = h.flow
+        guard case .verificationPending(let failure, _) = first.run(indexingOn: nil) else {
+            return XCTFail("must initially be pending")
+        }
+        XCTAssertEqual(failure.stage, "verify")
+        XCTAssertEqual(failure.commandExitCode, 0)
+        XCTAssertEqual(failure.verification?.state, .present)
+        XCTAssertTrue(failure.report.contains("Disk disk90 ejected"))
+
+        h.targetInspector.gone = true
+        guard case .ejected = h.flow.reverify(failure) else {
+            return XCTFail("later offline evidence must repair the result")
+        }
+        XCTAssertEqual(h.calls.filter { $0 == eject }.count, 1)
     }
 
     func testChangedTargetBetweenAttemptsCannotBeEjected() {

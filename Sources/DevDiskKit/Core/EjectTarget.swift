@@ -35,9 +35,53 @@ struct TargetVolume: Equatable, Hashable {
     let uuid: String
 }
 
+enum EjectVerificationState: Equatable {
+    /// The device disappeared from the disk registry and its volumes are unmounted.
+    case offline
+    /// Fixed external devices can remain enumerated after a successful software
+    /// eject. Their volumes are gone from the kernel mount table.
+    case unmounted
+    case present, unavailable
+}
+
+/// One conservative observation of the post-eject state. A missing mount alone is
+/// not success: both the physical disk registry and every related mount must agree.
+struct EjectVerification: Equatable {
+    let state: EjectVerificationState
+    let physicalDiskPresent: Bool?
+    let mountedVolumes: [TargetVolume]
+    let relatedMountsKnown: Bool
+    let issue: Message?
+
+    var confirmedOffline: Bool { state == .offline }
+
+    var detail: Message {
+        let disk = physicalDiskPresent.map {
+            $0 ? M("ejectverification.physical.disk.present") : M("ejectverification.physical.disk.absent")
+        } ?? M("ejectverification.physical.disk.unknown")
+        let mounts = !relatedMountsKnown
+            ? M("ejectverification.related.volumes.unknown")
+            : mountedVolumes.isEmpty
+                ? M("ejectverification.related.volumes.unmounted")
+                : M("ejectverification.related.volumes.still.mounted", mountedVolumes.map(\.mount).joined(separator: ", "))
+        return issue.map { disk + "; " + mounts + "; " + $0 } ?? disk + "; " + mounts
+    }
+}
+
 protocol TargetInspecting {
     func target(at mount: String, runner: CommandRunner) throws -> EjectTarget
-    func isEjected(_ target: EjectTarget, runner: CommandRunner) throws -> Bool
+    func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
+                           timeout: TimeInterval) -> EjectVerification
+}
+
+extension TargetInspecting {
+    func isEjected(_ target: EjectTarget, runner: CommandRunner) throws -> Bool {
+        let result = ejectVerification(target, runner: runner, timeout: Deadline.quick)
+        if result.state == .unavailable {
+            throw ProbeFailure(result.issue ?? M("ejecttarget.could.not.verify.the.system.disk.list"))
+        }
+        return result.confirmedOffline
+    }
 }
 
 struct SystemTargetInspector: TargetInspecting {
@@ -103,14 +147,36 @@ struct SystemTargetInspector: TargetInspecting {
                      affected: affected.sorted { $0.mount < $1.mount })
     }
 
-    func isEjected(_ target: EjectTarget, runner: CommandRunner) throws -> Bool {
-        let r = try runner.run(Tool.diskutil, ["list", "-plist"])
-        try r.requireSuccess("diskutil list")
-        guard let d = VolumeProbe.plist(r.stdout), let disks = d["AllDisks"] as? [String], !disks.isEmpty else {
-            throw ProbeFailure(M("ejecttarget.could.not.verify.the.system.disk.list"))
+    func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
+                           timeout: TimeInterval) -> EjectVerification {
+        var diskPresent: Bool?
+        var mounted: [TargetVolume] = []
+        var mountsKnown = false
+        var issues: [Message] = []
+        do {
+            let r = try runner.run(Tool.diskutil, ["list", "-plist"], timeout: max(0.05, timeout))
+            try r.requireSuccess("diskutil list")
+            guard let d = VolumeProbe.plist(r.stdout), let disks = d["AllDisks"] as? [String], !disks.isEmpty else {
+                throw ProbeFailure(M("ejecttarget.could.not.verify.the.system.disk.list"))
+            }
+            diskPresent = disks.contains(target.physicalDisk)
+        } catch {
+            issues.append(error.displayMessage)
         }
-        let paths = Set(try mountedPaths())
-        return !disks.contains(target.physicalDisk)
-            && target.affected.allSatisfy { !paths.contains($0.mount) }
+        do {
+            let paths = Set(try mountedPaths())
+            mounted = target.affected.filter { paths.contains($0.mount) }
+            mountsKnown = true
+        } catch {
+            issues.append(error.displayMessage)
+        }
+        let issue = issues.isEmpty ? nil : issues.joined(separator: M("issue.separator"))
+        let state: EjectVerificationState
+        if diskPresent == false, mountsKnown, mounted.isEmpty, issue == nil { state = .offline }
+        else if diskPresent == true, mountsKnown, mounted.isEmpty, issue == nil { state = .unmounted }
+        else if diskPresent == true || !mounted.isEmpty { state = .present }
+        else { state = .unavailable }
+        return .init(state: state, physicalDiskPresent: diskPresent,
+                     mountedVolumes: mounted, relatedMountsKnown: mountsKnown, issue: issue)
     }
 }
