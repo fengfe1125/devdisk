@@ -44,6 +44,12 @@ final class CancellationToken: @unchecked Sendable {
         committed = true
         return true
     }
+    /// Only a completed, verified refusal can reopen cancellation between attempts.
+    /// Success and unknown outcomes stay committed until this operation ends.
+    func finishRefusedAttempt() {
+        lock.lock(); defer { lock.unlock() }
+        committed = false
+    }
 }
 
 struct VolumeIdentity: Hashable {

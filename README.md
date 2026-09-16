@@ -54,7 +54,7 @@ If your development setup lives on an external drive, this probably sounds famil
 - Touch system processes or other users' processes.
 - Ask for admin rights. When a system setting needs changing, it gives you a command to copy instead of running it for you.
 
-Simulators, builds that are still running, and anything it can't identify are left alone. DevDisk asks you to deal with them first.
+Verified terminal and background tasks can also be selected explicitly for termination; these choices start unchecked and may interrupt work. Unverified processes remain manual. If an app is waiting for you to save, use **Continue checking and eject** afterwards. System refusals retain the blocking PID and error details.
 
 ## Language
 
@@ -72,7 +72,7 @@ For more detailed drive health (life left, temperature, power-on hours), you can
 brew install smartmontools
 ```
 
-**Requirements:** macOS 14 or later on a Mac with Apple silicon. The app's interface is currently in Chinese.
+**Requirements:** macOS 14 or later on a Mac with Apple silicon. The app supports English and Simplified Chinese.
 
 ## Build from source
 
@@ -85,6 +85,7 @@ swift test
 
 - [How DevDisk works](docs/how-it-works.md): the exact eject steps, what it can and can't detect, and how to test it.
 - [1.1.0 validation record](docs/validation-1.1.0.md) (in Chinese)
+- [1.3.0 eject recovery validation](docs/validation-eject-recovery.md) (in Chinese)
 
 ## License
 

@@ -15,6 +15,9 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
                              executable: "/Applications/演示编辑器.app/Contents/MacOS/editor",
                              bundleID: "devdisk.demo.editor\(index)", appName: "演示编辑器 \(index)")
         }
+        if scenario.contains("tasks") {
+            live[90100] = .init(pid: 90100, uid: getuid(), startedSeconds: 42, startedMicros: 0, executable: "/bin/zsh")
+        }
     }
     var targetValue: EjectTarget {
         let volume = TargetVolume(name: "DevDisk 演示盘", mount: mount, device: "disk900s1", uuid: "DEMO-ONLY")
@@ -36,7 +39,7 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
     }
     func identity(_ pid: Int32) throws -> ProcessIdentity? { live[pid] }
     func requestQuit(_ identity: ProcessIdentity) throws {
-        if !scenario.contains("running") { live.removeValue(forKey: identity.pid) }
+        if !scenario.contains("running") && !scenario.contains("save") { live.removeValue(forKey: identity.pid) }
     }
     func target(at mount: String, runner: CommandRunner) throws -> EjectTarget { targetValue }
     func isEjected(_ target: EjectTarget, runner: CommandRunner) throws -> Bool { gone }
@@ -48,14 +51,18 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
         case Tool.ps: return result("1 root /sbin/launchd\n" + live.keys.map { "\($0) demo /Applications/Demo.app/Contents/MacOS/editor" }.joined(separator: "\n"))
         case Tool.lsof:
             if scenario.contains("unknown") { return .init(stdout: Data(), stderr: "演示：检测超时，结果不完整", exitCode: -1, timedOut: true) }
-            return result(live.keys.sorted().map { "p\($0)\nceditor\nLdemo\nn\(mount)/Projects/Example-\($0)/Sources/document.swift\n" }.joined(), code: live.isEmpty ? 1 : 0)
+            return result(live.keys.sorted().map { "p\($0)\nceditor\nLdemo\nf3\nn\(mount)/Projects/Example-\($0)/Sources/document.swift\n" }.joined(), code: live.isEmpty ? 1 : 0)
         case Tool.hdiutil:
             guard args == ["info", "-plist"] else { throw ProbeFailure("演示不支持此操作") }
             return .init(stdout: try PropertyListSerialization.data(fromPropertyList: ["images": []], format: .xml, options: 0), stderr: "", exitCode: 0)
         case Tool.diskutil:
             guard args == ["eject", "disk900"] else { throw ProbeFailure("演示不支持此操作") }
             if scenario.contains("waiting") { Thread.sleep(forTimeInterval: 8) }
+            if scenario.contains("refusal") { return .init(stdout: Data(), stderr: "Unmount was dissented by PID 90099 (/usr/libexec/demo-service)", exitCode: 1) }
             gone = true; return result("simulated eject")
+        case Tool.kill:
+            guard args.count == 2, args[0] == "-TERM", let pid = Int32(args[1]), live[pid] != nil else { throw ProbeFailure("演示不支持此操作") }
+            live.removeValue(forKey: pid); return result("")
         default: throw ProbeFailure("隔离演示模式禁止执行系统命令")
         }
     }
@@ -74,6 +81,7 @@ enum DemoFixture {
         store.makeFlow = { _, mount, token in
             let flow = EjectFlow(runner: machine, mountPoint: mount, cancellation: token)
             flow.targets = machine; flow.inspector = machine
+            if scenario.contains("save") { flow.quitTimeout = 1 }
             return flow
         }
         store.applyDiscovery([machine.drive])

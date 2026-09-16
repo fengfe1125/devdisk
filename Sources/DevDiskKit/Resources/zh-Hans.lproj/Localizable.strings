@@ -33,12 +33,12 @@
 "configprobe.volume.ownership" = "卷所有权";
 "configprobe.the.device.did.not.report.its.ownership.setting" = "设备未报告所有权设置";
 "diskimages.could.not.parse.hdiutil.output" = "hdiutil 输出无法解析";
-"ejectflow.apps.quit.service.processes.stopped.images.ejected.requests" = "已退出应用 {0} 个、停止服务进程 {1} 个、推出映像 {2} 个；已发出的请求无法撤销。";
+"ejectflow.apps.quit.service.processes.stopped.images.ejected.requests" = "已完成：退出应用 {0} 个，停止服务或任务 {1} 个，推出映像 {2} 个。";
 "ejectflow.the.selected.volume.s.identity.changed.select.it" = "所选卷身份已变化，请重新选择";
 "ejectflow.the.target.drive.or.related.volumes.changed.during" = "扫描期间目标盘或关联卷已变化，请重新检测";
 "ejectflow.verify.target.and.scope" = "确认目标及操作范围";
 "ejectflow.request.apps.to.quit" = "请求应用退出";
-"ejectflow.stop.approved.background.services" = "停止限定后台服务";
+"ejectflow.stop.approved.background.services" = "停止已批准的服务和任务";
 "ejectflow.eject.read.only.disk.images" = "推出只读磁盘映像";
 "ejectflow.recheck.open.files" = "复查占用";
 "ejectflow.ask.macos.to.eject" = "系统弹出";
@@ -175,7 +175,7 @@
 "connectedview.no.open.files.found.for.the.current.user" = "未发现当前用户的占用";
 "connectedview.view.details.and.scan.again" = "查看详情并重新检测…";
 "connectedview.safely.eject" = "安全弹出";
-"connectedview.read.only.preflight.first.confirm.before.handling.apps" = "先只读预检；需要处理应用或服务时再确认";
+"connectedview.read.only.preflight.first.confirm.before.handling.apps" = "先只读预检；关闭应用、服务或任务前由你确认";
 "devdiskapp.demo.open.menu.bar.panel" = "验收：打开菜单栏面板";
 "diskstore.mount.state.changed.the.preview.is.no.longer" = "挂载状态已变化，原预览已失效，请重新检测";
 "diskstore.disk.discovery.incomplete" = "磁盘发现未完成：";
@@ -184,7 +184,7 @@
 "diskstore.read.only.preflight.verify.target.and.open.files" = "只读预检：确认目标与占用";
 "diskstore.preview.cancelled.no.preparation.actions.were.performed" = "已取消预览，未执行处理操作";
 "diskstore.operation.cancelled.requests.already.sent.cannot.be.undone" = "操作已中止；已发出的请求无法撤销";
-"diskstore.time.s.apps.confirmed.quit.service.processes.stopped" = "耗时 {0} 秒 · 确认退出 {1} 个应用、停止 {2} 个服务进程";
+"diskstore.time.s.apps.confirmed.quit.service.processes.stopped" = "耗时 {0} 秒 · 确认退出 {1} 个应用、停止 {2} 个服务或任务";
 "drivepickerview.connected.external.drives" = "已连接的外置盘";
 "drivepickerview." = "{0} 块";
 "drivepickerview.default.drive" = "默认盘";
@@ -199,21 +199,21 @@
 "ejectpreviewview.read.only.preflight.complete" = "只读预检已完成";
 "ejectpreviewview.scanned.must.recheck.after.seconds" = "检测于 {0} · 超过 30 秒须重新核验";
 "ejectpreviewview.standard.permissions.reveal.only.visible.handles.macos.checks" = "普通权限仅能检查可见句柄；系统将在弹出时再次判断。";
-"ejectpreviewview.so.far.apps.quit.services.stopped.images.ejected" = "本次已退出应用 {0} 个、停止服务 {1} 个、推出映像 {2} 个。以下为更新后的预览。";
+"ejectpreviewview.so.far.apps.quit.services.stopped.images.ejected" = "已完成：退出应用 {0} 个，停止服务或任务 {1} 个，推出映像 {2} 个。";
 "ejectpreviewview.ejecting.the.disk.affects.these.volumes" = "整盘弹出会影响以下卷";
 "ejectpreviewview.this.version.does.not.automatically.handle.processes.on" = "本版不对多卷盘自动处理进程，只能明确选择普通系统弹出。";
 "ejectpreviewview.apps.to.request.to.quit" = "将请求退出的应用";
 "ejectpreviewview.quitting.affects.the.entire.app.each.app.handles" = "退出会影响整个应用，由应用处理未保存内容。";
 "ejectpreviewview.approved.background.services.to.stop" = "将停止的限定后台服务";
-"ejectpreviewview.services.may.still.be.working.after.confirmation.sends" = "服务可能仍在工作；确认后仅发送 TERM 并等待退出。";
+"ejectpreviewview.services.may.still.be.working.after.confirmation.sends" = "服务可能仍在工作；确认后仅发送 TERM，并检查退出或文件释放。";
 "ejectpreviewview.handle.manually" = "需手动处理";
 "ejectpreviewview.save.and.stop.these.tasks.then.scan.again" = "请先保存并停止这些任务，再重新检测。";
 "ejectpreviewview.related.disk.images" = "关联磁盘映像";
 "ejectpreviewview.writable.or.unknown.eject.manually" = "可写或属性未知：需手动推出";
 "ejectpreviewview.read.only.normal.eject.after.confirmation" = "只读：确认后普通推出";
 "ejectpreviewview.manually.eject.writable.images.or.images.with.unknown" = "请先手动推出可写或属性未知的映像。";
-"ejectpreviewview.confirm.and.eject" = "确认处理并弹出";
-"ejectpreviewview.try.system.eject.only" = "仅尝试系统弹出";
+"ejectpreviewview.confirm.and.eject" = "关闭占用并弹出";
+"ejectpreviewview.try.system.eject.only" = "仅尝试普通系统弹出";
 "ejectpreviewview.does.not.quit.apps.stop.services.eject.images" = "不会退出应用、停止服务、主动推出映像或强制卸载";
 "ejectpreviewview.scan.again" = "重新检测";
 "ejectpreviewview.cancel" = "取消";
@@ -246,9 +246,9 @@
 "scanview.eject.sends.a.quit.request.each.app.shows" = "弹出时会发送退出请求，由应用自己弹保存对话框。绝不强杀。";
 "scanview.can.stop.after.confirmation" = "确认后可停止";
 "scanview.approved.background.services.may.still.be.working.no" = "限定后台服务可能仍在工作；确认前不会发送停止请求。";
-"scanview.emulators.foreground.builds.and.processes.with.unverified.identities" = "模拟器、前台构建及无法确认身份的进程不会被自动停止。";
+"scanview.emulators.foreground.builds.and.processes.with.unverified.identities" = "身份已核验的任务可在弹出预览中勾选终止；无法核验的对象需手动处理。";
 "scanview.system.processes" = "系统进程";
-"scanview.devdisk.does.not.handle.these.diskutil.eject.asks" = "不由本程序处理。diskutil eject 会让它们自行释放。";
+"scanview.devdisk.does.not.handle.these.diskutil.eject.asks" = "这些进程交由 macOS 协调；系统仍可能拒绝弹出。";
 "scanview.back" = "返回";
 "scanview.scanning" = "检测中…";
 "scanview.no.open.files.found.for.your.processes.s" = "未发现你的进程持有文件，用时 {0} 秒";
@@ -258,7 +258,7 @@
 "scanview.hr.ago" = "{0} 小时前";
 "scanview." = "{0} 个";
 "scanview.standard.permissions.show.only.your.own.processes" = "普通权限只能看到你自己的进程。";
-"scanview.system.processes.above.are.inferred.from.the.mounted" = "上面的系统进程是按「卷已挂载 + Spotlight 索引开启」推断的，不是扫出来的——lsof 看不见其他用户的文件句柄。";
+"scanview.system.processes.above.are.inferred.from.the.mounted" = "标为「推断」的条目来自挂载和索引设置，不是实时占用证据。其他系统条目可能包含实际可见的文件占用。";
 "scanview.preflight.and.eject" = "预检并弹出";
 "scanview.more" = "…另有 {0} 个";
 "scanview.files" = "{0} 个文件";
@@ -298,3 +298,19 @@
 "demo.title" = "隔离演示模式";
 "demo.detail" = "本窗口不会退出真实应用或弹出真实硬盘。";
 "configprobe.all.shutdowns.were.unsafe.one" = "{0} 次断电全部非正常";
+
+// Eject recovery and explicit task selection.
+"ejectflow.waiting.for.release" = "{0} 仍在运行或占用文件。请处理保存提示，然后继续检查。";
+"ejectflow.disk.still.connected" = "磁盘仍连接，尚不可拔出。";
+"ejectpreviewview.other.tasks" = "其他占用任务";
+"ejectpreviewview.terminate.warning" = "勾选允许终止的任务，可能中断工作并丢失未保存进度。系统服务不在此范围内。";
+"ejectpreviewview.allow.terminate" = "允许终止 {0}";
+"ejectpreviewview.continue.checking" = "继续检查并弹出";
+"ejectpreviewview.failure.details" = "失败详情";
+"ejectpreviewview.copy.failure" = "复制失败详情";
+
+"ejectfailure.volume" = "卷：{0}（{1}）";
+"ejectfailure.disk" = "物理盘：{0}";
+"ejectfailure.stage" = "失败步骤：{0}";
+"ejectfailure.pid" = "阻塞进程 PID：{0}";
+"ejectfailure.unknown" = "未知";

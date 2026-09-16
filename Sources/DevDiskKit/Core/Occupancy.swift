@@ -124,15 +124,15 @@ struct Occupancy {
 
     // MARK: - Full scan
 
-    /// `lsof +D` walks the whole tree, so this is the slow path and only ever runs
-    /// when the user asks for it. Still limited to the current user's processes.
+    /// Query handles on the mounted filesystem, without walking its directories.
+    /// Visibility is still limited by the current user's permissions.
     func fullScan(mountPoint: String, indexingOn: Bool?) throws -> OccupancyReport {
         let start = Date()
         // -F emits one field per line (p pid, c command, L login, n name), which is
         // far safer to parse than lsof's aligned columns.
         var issues: [Message] = []
         let result = ProbeResult<CommandResult>.capture {
-            try runner.run(Tool.lsof, ["-nP", "+w", "-F", "pcLn", "+D", mountPoint],
+            try runner.run(Tool.lsof, ["-nP", "+w", "-F", "pcLfn", "+f", "--", mountPoint],
                            timeout: Deadline.scan)
         }
         let r = result.value
@@ -146,7 +146,7 @@ struct Occupancy {
                 issues.append(M("occupancy.lsof.output.could.not.be.fully.parsed"))
             }
         } else { issues += result.issues }
-        // +D is authoritative for membership, but defend against prefix collisions
+        // +f selects the filesystem, but also defend against prefix collisions
         // and escaped/ambiguous path output rather than inventing a relationship.
         let prefix = mountPoint.hasSuffix("/") ? mountPoint : mountPoint + "/"
         sets = sets.compactMap { set in
@@ -168,7 +168,7 @@ struct Occupancy {
             let pat = info.flatMap(Self.classify)
             let mine = identity?.uid == getuid()
             let kind: HolderKind
-            if identity != nil, !mine { kind = .system }
+            if let identity, !mine || identity.isProtectedService { kind = .system }
             else if mine, identity?.bundleID != nil { kind = .guiApp }
             else if mine, let info, let identity, Self.isAllowedDaemon(info, identity: identity) { kind = .daemon }
             else { kind = .manual }
@@ -200,12 +200,20 @@ struct Occupancy {
 
     static func validLsof(_ text: String) -> Bool {
         var hasProcess = false
+        var hasFile = false
         for line in text.split(separator: "\n") {
             guard let tag = line.first else { continue }
             if tag == "p" {
                 guard let pid = Int32(line.dropFirst()), pid > 0 else { return false }
                 hasProcess = true
-            } else if !hasProcess || !"cLn".contains(tag) { return false }
+                hasFile = false
+            } else if !hasProcess { return false }
+            else if tag == "f" {
+                guard line.count > 1 else { return false }
+                hasFile = true
+            } else if tag == "n" {
+                guard hasFile, line.count > 1 else { return false }
+            } else if !"cL".contains(tag) { return false }
         }
         return hasProcess
     }

@@ -33,12 +33,12 @@
 "configprobe.volume.ownership" = "Volume ownership";
 "configprobe.the.device.did.not.report.its.ownership.setting" = "The device did not report its ownership setting";
 "diskimages.could.not.parse.hdiutil.output" = "Could not parse hdiutil output";
-"ejectflow.apps.quit.service.processes.stopped.images.ejected.requests" = "Apps quit: {0}; service processes stopped: {1}; images ejected: {2}. Requests already sent cannot be undone.";
+"ejectflow.apps.quit.service.processes.stopped.images.ejected.requests" = "Completed: {0} apps quit, {1} services/tasks stopped, {2} images ejected.";
 "ejectflow.the.selected.volume.s.identity.changed.select.it" = "The selected volume's identity changed. Select it again.";
 "ejectflow.the.target.drive.or.related.volumes.changed.during" = "The target drive or related volumes changed during the scan. Scan again.";
 "ejectflow.verify.target.and.scope" = "Verify target and scope";
 "ejectflow.request.apps.to.quit" = "Request apps to quit";
-"ejectflow.stop.approved.background.services" = "Stop approved background services";
+"ejectflow.stop.approved.background.services" = "Stop approved services and tasks";
 "ejectflow.eject.read.only.disk.images" = "Eject read-only disk images";
 "ejectflow.recheck.open.files" = "Recheck open files";
 "ejectflow.ask.macos.to.eject" = "Ask macOS to eject";
@@ -53,7 +53,7 @@
 "ejectflow.process.identity.changed.scan.again" = "Process identity changed. Scan again.";
 "ejectflow.stop.service" = "Stop service";
 "ejectflow.apps.confirmed.quit" = "Apps confirmed quit: {0}";
-"ejectflow.processes.confirmed.stopped" = "Processes confirmed stopped: {0}";
+"ejectflow.processes.confirmed.stopped" = "{0} processes confirmed stopped";
 "ejectflow.could.not.eject.image" = "Could not eject image {0}";
 "ejectflow.no.images.to.eject" = "No images to eject";
 "ejectflow.images.ejected" = "Images ejected: {0}";
@@ -175,7 +175,7 @@
 "connectedview.no.open.files.found.for.the.current.user" = "No open files found for the current user";
 "connectedview.view.details.and.scan.again" = "View details and scan again…";
 "connectedview.safely.eject" = "Safely Eject";
-"connectedview.read.only.preflight.first.confirm.before.handling.apps" = "Read-only preflight first; confirm before handling apps or services";
+"connectedview.read.only.preflight.first.confirm.before.handling.apps" = "Read-only preflight first; confirm before closing apps, services or tasks";
 "devdiskapp.demo.open.menu.bar.panel" = "Demo: Open Menu Bar Panel";
 "diskstore.mount.state.changed.the.preview.is.no.longer" = "Mount state changed. The preview is no longer valid. Scan again.";
 "diskstore.disk.discovery.incomplete" = "Disk discovery incomplete: ";
@@ -184,7 +184,7 @@
 "diskstore.read.only.preflight.verify.target.and.open.files" = "Read-only preflight: verify target and open files";
 "diskstore.preview.cancelled.no.preparation.actions.were.performed" = "Preview cancelled; no preparation actions were performed";
 "diskstore.operation.cancelled.requests.already.sent.cannot.be.undone" = "Operation cancelled; requests already sent cannot be undone";
-"diskstore.time.s.apps.confirmed.quit.service.processes.stopped" = "Time: {0} s · Apps confirmed quit: {1}; service processes stopped: {2}";
+"diskstore.time.s.apps.confirmed.quit.service.processes.stopped" = "Time: {0} s · Apps confirmed quit: {1}; services/tasks stopped: {2}";
 "drivepickerview.connected.external.drives" = "Connected External Drives";
 "drivepickerview." = "{0}";
 "drivepickerview.default.drive" = "Default drive";
@@ -199,21 +199,21 @@
 "ejectpreviewview.read.only.preflight.complete" = "Read-only preflight complete";
 "ejectpreviewview.scanned.must.recheck.after.seconds" = "Scanned {0} · Must recheck after 30 seconds";
 "ejectpreviewview.standard.permissions.reveal.only.visible.handles.macos.checks" = "Standard permissions reveal only visible handles; macOS checks again when ejecting.";
-"ejectpreviewview.so.far.apps.quit.services.stopped.images.ejected" = "So far: apps quit: {0}; services stopped: {1}; images ejected: {2}. Updated preview below.";
+"ejectpreviewview.so.far.apps.quit.services.stopped.images.ejected" = "Completed: {0} apps quit, {1} services/tasks stopped, {2} images ejected.";
 "ejectpreviewview.ejecting.the.disk.affects.these.volumes" = "Ejecting the disk affects these volumes";
 "ejectpreviewview.this.version.does.not.automatically.handle.processes.on" = "This version does not automatically handle processes on disks with multiple volumes. You can explicitly try a normal system eject.";
 "ejectpreviewview.apps.to.request.to.quit" = "Apps to Request to Quit";
 "ejectpreviewview.quitting.affects.the.entire.app.each.app.handles" = "Quitting affects the entire app. Each app handles its unsaved work.";
 "ejectpreviewview.approved.background.services.to.stop" = "Approved Background Services to Stop";
-"ejectpreviewview.services.may.still.be.working.after.confirmation.sends" = "Services may still be working. After confirmation, sends TERM only and waits for exit.";
+"ejectpreviewview.services.may.still.be.working.after.confirmation.sends" = "Services may still be working. After confirmation, sends TERM only and checks for exit or released files.";
 "ejectpreviewview.handle.manually" = "Handle Manually";
 "ejectpreviewview.save.and.stop.these.tasks.then.scan.again" = "Save and stop these tasks, then scan again.";
 "ejectpreviewview.related.disk.images" = "Related Disk Images";
 "ejectpreviewview.writable.or.unknown.eject.manually" = "Writable or unknown: eject manually";
 "ejectpreviewview.read.only.normal.eject.after.confirmation" = "Read-only: normal eject after confirmation";
 "ejectpreviewview.manually.eject.writable.images.or.images.with.unknown" = "Manually eject writable images or images with unknown properties first.";
-"ejectpreviewview.confirm.and.eject" = "Confirm and Eject";
-"ejectpreviewview.try.system.eject.only" = "Try System Eject Only";
+"ejectpreviewview.confirm.and.eject" = "Close occupants and eject";
+"ejectpreviewview.try.system.eject.only" = "Try normal system eject only";
 "ejectpreviewview.does.not.quit.apps.stop.services.eject.images" = "Does not quit apps, stop services, eject images separately or force unmount";
 "ejectpreviewview.scan.again" = "Scan Again";
 "ejectpreviewview.cancel" = "Cancel";
@@ -246,9 +246,9 @@
 "scanview.eject.sends.a.quit.request.each.app.shows" = "Eject sends a quit request; each app shows its own save dialog. Apps are never force-quit.";
 "scanview.can.stop.after.confirmation" = "Can Stop After Confirmation";
 "scanview.approved.background.services.may.still.be.working.no" = "Approved background services may still be working. No stop request is sent before confirmation.";
-"scanview.emulators.foreground.builds.and.processes.with.unverified.identities" = "Emulators, foreground builds and processes with unverified identities are not stopped automatically.";
+"scanview.emulators.foreground.builds.and.processes.with.unverified.identities" = "Verified tasks can be selected for termination in the eject preview. Unverified processes need manual handling.";
 "scanview.system.processes" = "System Processes";
-"scanview.devdisk.does.not.handle.these.diskutil.eject.asks" = "DevDisk does not handle these. diskutil eject asks them to release the volume.";
+"scanview.devdisk.does.not.handle.these.diskutil.eject.asks" = "DevDisk leaves these to macOS. System eject can still be refused.";
 "scanview.back" = "Back";
 "scanview.scanning" = "Scanning…";
 "scanview.no.open.files.found.for.your.processes.s" = "No open files found for your processes; {0} s";
@@ -258,7 +258,7 @@
 "scanview.hr.ago" = "{0} hr ago";
 "scanview." = "{0}";
 "scanview.standard.permissions.show.only.your.own.processes" = "Standard permissions show only your own processes.";
-"scanview.system.processes.above.are.inferred.from.the.mounted" = "System processes above are inferred from the mounted volume and Spotlight setting, not found by scanning. lsof cannot see other users' file handles.";
+"scanview.system.processes.above.are.inferred.from.the.mounted" = "Entries marked inferred come from mount and indexing settings, not live handles. Other system entries may have visible file evidence.";
 "scanview.preflight.and.eject" = "Preflight and Eject";
 "scanview.more" = "…{0} more";
 "scanview.files" = "{0} files";
@@ -298,3 +298,19 @@
 "demo.title" = "Isolated Demo Mode";
 "demo.detail" = "This window never quits real apps or ejects real disks.";
 "configprobe.all.shutdowns.were.unsafe.one" = "The only shutdown was unsafe ({0})";
+
+// Eject recovery and explicit task selection.
+"ejectflow.waiting.for.release" = "{0} is still running or holding files. Handle any save dialog, then continue checking.";
+"ejectflow.disk.still.connected" = "The disk is still connected; not safe to unplug.";
+"ejectpreviewview.other.tasks" = "Other tasks using this drive";
+"ejectpreviewview.terminate.warning" = "Select tasks you allow DevDisk to terminate. This can interrupt work and lose unsaved progress. System services are excluded.";
+"ejectpreviewview.allow.terminate" = "Allow terminating {0}";
+"ejectpreviewview.continue.checking" = "Continue checking and eject";
+"ejectpreviewview.failure.details" = "Failure details";
+"ejectpreviewview.copy.failure" = "Copy failure details";
+
+"ejectfailure.volume" = "Volume: {0} ({1})";
+"ejectfailure.disk" = "Disk: {0}";
+"ejectfailure.stage" = "Stage: {0}";
+"ejectfailure.pid" = "Blocking PID: {0}";
+"ejectfailure.unknown" = "unknown";

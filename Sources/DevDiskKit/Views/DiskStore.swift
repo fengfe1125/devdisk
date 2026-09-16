@@ -24,6 +24,7 @@ final class DiskStore: ObservableObject {
     @Published var ejectSteps: [EjectFlow.Step] = []
     @Published var lastError: Message?
     @Published var ejectFailure: Message?
+    @Published var ejectDiagnostic: EjectFailure?
     @Published var lastEjectSummary: Message?
     @Published var ejectPlan: EjectPlan?
     @Published var waitingForSystem = false
@@ -237,6 +238,7 @@ final class DiskStore: ObservableObject {
         mounted = true
         verifiedEjected = nil
         snapshot = nil; directories = []; occupancy = nil; ejectFailure = nil; lastError = nil
+        ejectDiagnostic = nil
         screen = .connected
         refreshActive = true
         refreshCurrent()
@@ -334,14 +336,21 @@ final class DiskStore: ObservableObject {
         beginPreflight()
     }
     func retryPreflight() {
-        guard operation == .awaitingConfirmation else { return }
+        guard operation == .awaitingConfirmation, let previous = ejectPlan else { return }
         operationToken?.cancel()
-        beginPreflight()
+        beginPreflight(previous: previous)
     }
-    private func beginPreflight() {
+    func selectTask(_ identity: ProcessIdentity, selected: Bool) {
+        guard operation == .awaitingConfirmation, let plan = ejectPlan,
+              plan.manual.contains(where: { $0.identity == identity && $0.canTerminateTask }) else { return }
+        if selected { ejectPlan?.selectedTasks.insert(identity) }
+        else { ejectPlan?.selectedTasks.remove(identity) }
+    }
+    private func beginPreflight(previous: EjectPlan? = nil) {
         invalidateScans()
         operation = .preflight; screen = .ejecting
         ejectPlan = nil; ejectFailure = nil; lastError = nil; waitingForSystem = false
+        if previous == nil { ejectDiagnostic = nil }
         ejectSteps = [.init(id: "scan", title: M("diskstore.read.only.preflight.verify.target.and.open.files"), state: .running)]
         let token = CancellationToken()
         operationToken = token
@@ -356,7 +365,7 @@ final class DiskStore: ObservableObject {
                 let flow = maker(runner, mount, token)
                 flow.expectedVolume = expected
                 self?.wire(flow, token: token)
-                let outcome = flow.run(indexingOn: nil)
+                let outcome = previous.map { flow.recheck($0) } ?? flow.run(indexingOn: nil)
                 Task { @MainActor in self?.receive(outcome, token: token) }
             }
         }
@@ -371,8 +380,20 @@ final class DiskStore: ObservableObject {
         flow.onCommit = { [weak self] in
             Task { @MainActor in
                 guard let self, self.operationToken === token, self.operation == .preflight || self.operation == .executing || self.operation == .cancelling else { return }
-                self.waitingForSystem = true
+                self.waitingForSystem = token.isCommitted
                 self.operation = .executing
+            }
+        }
+        flow.onSystemReturned = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.operationToken === token, self.operation.locksTarget else { return }
+                self.waitingForSystem = token.isCommitted
+            }
+        }
+        flow.onFailure = { [weak self] failure in
+            Task { @MainActor in
+                guard let self, self.operationToken === token else { return }
+                self.ejectDiagnostic = failure
             }
         }
     }
@@ -392,7 +413,9 @@ final class DiskStore: ObservableObject {
         token.cancel()
         if operation == .awaitingConfirmation {
             operation = .finished; ejectPlan = nil; screen = .connected
-            ejectFailure = M("diskstore.preview.cancelled.no.preparation.actions.were.performed")
+            ejectFailure = ejectDiagnostic == nil && ejectSteps.count == 1
+                ? M("diskstore.preview.cancelled.no.preparation.actions.were.performed")
+                : M("diskstore.operation.cancelled.requests.already.sent.cannot.be.undone")
             refresh()
         } else { operation = .cancelling }
     }
@@ -407,6 +430,7 @@ final class DiskStore: ObservableObject {
         switch outcome {
         case .preview(let plan):
             ejectPlan = plan; operation = .awaitingConfirmation; screen = .preview
+            if let failure = plan.failure { ejectDiagnostic = failure }
             waitingForSystem = false
         case .ejected(let duration, let apps, let daemons):
             operation = .finished; screen = .ejected(duration, apps: apps, daemons: daemons)
@@ -422,7 +446,7 @@ final class DiskStore: ObservableObject {
     nonisolated static func summary(_ duration: TimeInterval, apps: Int, daemons: Int) -> Message {
         M("diskstore.time.s.apps.confirmed.quit.service.processes.stopped", Message.number(duration, decimals: 1), apps, daemons)
     }
-    func dismissEjectFailure() { ejectFailure = nil }
+    func dismissEjectFailure() { ejectFailure = nil; ejectDiagnostic = nil }
     func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
     func openSettings(_ url: String) { if let u = URL(string: url) { NSWorkspace.shared.open(u) } }
     func quit() { guard !operation.locksTarget else { return }; NSApplication.shared.terminate(nil) }

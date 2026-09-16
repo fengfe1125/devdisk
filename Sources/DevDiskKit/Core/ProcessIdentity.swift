@@ -9,6 +9,16 @@ struct ProcessIdentity: Hashable {
     let executable: String
     var bundleID: String? = nil
     var appName: String? = nil
+
+    /// These services may run under the login UID too (for example mdworker).
+    /// Ordinary tools in /bin and /usr/bin remain eligible for explicit TERM.
+    var isProtectedService: Bool {
+        pid <= 1 || pid == getpid() || bundleID == "com.sakura.devdisk"
+            || ["/System/Library/", "/usr/libexec/", "/usr/sbin/", "/sbin/"]
+                .contains { executable.hasPrefix($0) }
+    }
+
+    var canTerminateTask: Bool { uid == getuid() && bundleID == nil && !isProtectedService }
 }
 
 protocol ProcessInspecting {

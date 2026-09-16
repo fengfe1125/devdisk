@@ -19,7 +19,7 @@ struct CommandResult {
 enum Deadline {
     static let quick: TimeInterval = 15    // diskutil info, ps, mdutil, tmutil, pmset
     static let eject: TimeInterval = 30
-    static let scan: TimeInterval = 30     // lsof +D
+    static let scan: TimeInterval = 30     // lsof filesystem handle query
     static let walk: TimeInterval = 60     // du -sk
 }
 

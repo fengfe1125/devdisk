@@ -55,7 +55,7 @@ final class EjectSafetyTests: XCTestCase {
     }
     func testTimeoutKeepsUnknownAndSystemOnlyDoesNoCleanup() throws {
         let h = FlowHarness(); h.add()
-        let key = "lsof -nP +w -F pcLn +D " + FlowHarness.mount
+        let key = "lsof -nP +w -F pcLfn +f -- " + FlowHarness.mount
         h.failures[key] = .init(stdout: Data(), stderr: "", exitCode: 0, timedOut: true)
         let f = h.flow, plan = try f.prepare()
         XCTAssertTrue(plan.incomplete)
@@ -64,7 +64,7 @@ final class EjectSafetyTests: XCTestCase {
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("hdiutil detach") })
     }
     func testProbeFailuresAreNotEmptySuccess() throws {
-        for command in ["ps -axo pid=,user=,args=", "hdiutil info -plist", "lsof -nP +w -F pcLn +D " + FlowHarness.mount] {
+        for command in ["ps -axo pid=,user=,args=", "hdiutil info -plist", "lsof -nP +w -F pcLfn +f -- " + FlowHarness.mount] {
             let h = FlowHarness()
             h.failures[command] = .init(stdout: Data(), stderr: "permission denied", exitCode: 1)
             let p = try h.flow.prepare()
@@ -72,7 +72,7 @@ final class EjectSafetyTests: XCTestCase {
         }
     }
     func testMalformedLsofAndPSAreUnknown() throws {
-        for command in ["ps -axo pid=,user=,args=", "lsof -nP +w -F pcLn +D " + FlowHarness.mount] {
+        for command in ["ps -axo pid=,user=,args=", "lsof -nP +w -F pcLfn +f -- " + FlowHarness.mount] {
             let h = FlowHarness()
             h.failures[command] = .init(stdout: Data("garbage\n".utf8), stderr: "", exitCode: 0)
             XCTAssertTrue(try h.flow.prepare().incomplete)
@@ -81,15 +81,15 @@ final class EjectSafetyTests: XCTestCase {
     func testTERMReturnDoesNotMeanProcessExited() throws {
         let h = FlowHarness(); h.add(); h.stopWorks = false
         let f = h.flow, p = try f.prepare()
-        guard case .aborted(let why) = f.execute(p, systemOnly: false) else { return XCTFail("must abort") }
-        XCTAssertTrue(why.render(.chinese).contains("仍在运行"))
-        XCTAssertTrue(why.render(.chinese).contains("停止服务进程 0"))
+        guard case .preview(let pending) = f.execute(p, systemOnly: false) else { return XCTFail("must wait") }
+        XCTAssertTrue(pending.notice?.render(.chinese).contains("仍在运行") == true)
+        XCTAssertEqual(pending.completedDaemons, 0)
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("diskutil eject") })
     }
     func testRefusedAppQuitNeverEscalates() throws {
         let h = FlowHarness(); h.add(app: "review.editor"); h.processes.refuseQuit = true
         let f = h.flow, p = try f.prepare()
-        guard case .aborted = f.execute(p, systemOnly: false) else { return XCTFail("must abort") }
+        guard case .preview = f.execute(p, systemOnly: false) else { return XCTFail("must wait") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("diskutil eject") })
     }
     func testPIDReuseReturnsNewPreview() throws {

@@ -9,12 +9,22 @@ struct EjectPlan: Equatable {
     var completedApps: Int = 0
     var completedDaemons: Int = 0
     var completedImages: Int = 0
+    var selectedTasks: Set<ProcessIdentity> = []
+    var requested: [ProcessIdentity: HolderKind] = [:]
+    var credited: Set<ProcessIdentity> = []
+    var notice: Message? = nil
+    var failure: EjectFailure? = nil
     var manual: [Holder] { holders.filter { $0.kind == .manual } }
     var apps: [Holder] { holders.filter { $0.kind == .guiApp } }
     var daemons: [Holder] { holders.filter { $0.kind == .daemon } }
     var writableImages: [DiskImage] { images.filter { $0.writable || !$0.accessKnown } }
     var incomplete: Bool { !issues.isEmpty }
-    var canPrepare: Bool { !incomplete && manual.isEmpty && writableImages.isEmpty && !target.multipleVolumes }
+    var canPrepare: Bool { canPrepare(approvedTasks: selectedTasks) }
+    func canPrepare(approvedTasks: Set<ProcessIdentity>) -> Bool {
+        !incomplete && writableImages.isEmpty && !target.multipleVolumes
+            && manual.allSatisfy { $0.canTerminateTask && $0.identity.map(approvedTasks.contains) == true }
+    }
+    var needsContinuation: Bool { !requested.isEmpty }
     var requiresConfirmation: Bool {
         incomplete || target.multipleVolumes || !manual.isEmpty || !images.isEmpty || !apps.isEmpty || !daemons.isEmpty
     }
@@ -58,6 +68,13 @@ final class EjectFlow: @unchecked Sendable {
     private(set) var steps: [Step] = []
     var onUpdate: ([Step]) -> Void = { _ in }
     var onCommit: () -> Void = {}
+    var onSystemReturned: () -> Void = {}
+    var onFailure: (EjectFailure) -> Void = { _ in }
+    private(set) var lastFailure: EjectFailure?
+    private var requested: [ProcessIdentity: HolderKind] = [:]
+    private var credited: Set<ProcessIdentity> = []
+    private var selectedTasks: Set<ProcessIdentity> = []
+    private var lastCommandOutput = ""
     private var stoppedApps = 0
     private var stoppedDaemons = 0
     private var detachedImages = 0
@@ -109,6 +126,8 @@ final class EjectFlow: @unchecked Sendable {
     func execute(_ approved: EjectPlan, systemOnly: Bool) -> Outcome {
         let started = now()
         stoppedApps = approved.completedApps; stoppedDaemons = approved.completedDaemons; detachedImages = approved.completedImages
+        selectedTasks = approved.selectedTasks; requested = approved.requested; credited = approved.credited
+        lastFailure = approved.failure; lastCommandOutput = ""
         steps = [Step(id: "validate", title: M("ejectflow.verify.target.and.scope")),
                  Step(id: "apps", title: M("ejectflow.request.apps.to.quit")), Step(id: "daemons", title: M("ejectflow.stop.approved.background.services")),
                  Step(id: "images", title: M("ejectflow.eject.read.only.disk.images")), Step(id: "recheck", title: M("ejectflow.recheck.open.files")),
@@ -128,12 +147,16 @@ final class EjectFlow: @unchecked Sendable {
                 set("validate", .done(M("ejectflow.only.attempt.a.normal.system.eject.leave.apps")))
                 for id in ["apps", "daemons", "images", "recheck"] { set(id, .skipped(M("ejectflow.user.chose.to.attempt.system.eject.only"))) }
             } else {
+                // Account for requests completed while the user handled a save dialog.
+                for identity in requested.keys where !credited.contains(identity) {
+                    if try inspector.identity(identity.pid) != identity { creditExit(identity) }
+                }
                 let fresh = try prepare()
                 guard fresh.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
-                guard fresh.canPrepare, fresh.processScope.isSubset(of: approved.processScope),
+                guard fresh.canPrepare(approvedTasks: selectedTasks), fresh.processScope.isSubset(of: approved.processScope),
                       fresh.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(fresh) }
                 set("validate", .done(M("ejectflow.operation.scope.verified")))
-                for (id, list) in [("apps", fresh.apps), ("daemons", fresh.daemons)] {
+                for (id, list) in [("apps", fresh.apps), ("daemons", fresh.daemons + fresh.manual)] {
                     set(id, .running)
                     if list.isEmpty { set(id, .skipped(M("ejectflow.nothing.needs.to.be.handled"))); continue }
                     for holder in list {
@@ -141,22 +164,39 @@ final class EjectFlow: @unchecked Sendable {
                         // Recheck both file evidence and identity immediately before each action.
                         let current = try prepare()
                         guard current.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
-                        guard current.canPrepare, current.processScope.isSubset(of: approved.processScope),
+                        guard current.canPrepare(approvedTasks: selectedTasks), current.processScope.isSubset(of: approved.processScope),
                               current.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(current) }
                         guard let identity = holder.identity,
                               current.holders.contains(where: { $0.identity == identity && $0.kind == holder.kind }) else { continue }
                         guard let live = try inspector.identity(identity.pid) else { continue }
-                        guard live == identity, live.uid == getuid() else { throw ProbeFailure(M("ejectflow.process.identity.changed.scan.again")) }
+                        guard live == identity, live.uid == getuid(), !live.isProtectedService else { throw ProbeFailure(M("ejectflow.process.identity.changed.scan.again")) }
                         try cancellation.check()
-                        if id == "apps" {
-                            try inspector.requestQuit(identity)
-                        } else {
-                            let r = try scoped.run(Tool.kill, ["-TERM", String(identity.pid)])
-                            try r.requireSuccess(M("ejectflow.stop.service"))
+                        if requested[identity] == nil {
+                            requested[identity] = holder.kind
+                            if id == "apps" {
+                                do { try inspector.requestQuit(identity) }
+                                catch {
+                                    recordFailure(approved.target, stage: id, message: error.displayMessage, blockingPID: identity.pid)
+                                    return previewOutcome(current, notice: error.displayMessage)
+                                }
+                            } else {
+                                guard holder.kind == .daemon || (holder.canTerminateTask && selectedTasks.contains(identity)) else {
+                                    return previewOutcome(current)
+                                }
+                                let r = try scoped.run(Tool.kill, ["-TERM", String(identity.pid)])
+                                lastCommandOutput = r.text + r.stderr
+                                try r.requireSuccess(M("ejectflow.stop.service"))
+                            }
                         }
                         set(id, .running)
-                        try waitForExit(identity)
-                        if id == "apps" { stoppedApps += 1 } else { stoppedDaemons += 1 }
+                        switch try waitForRelease(identity) {
+                        case .exited: creditExit(identity)
+                        case .released: break
+                        case .waiting:
+                            let message = M("ejectflow.waiting.for.release", holder.displayName)
+                            recordFailure(approved.target, stage: id, message: message, blockingPID: identity.pid)
+                            return previewOutcome(try prepare(), notice: message)
+                        }
                     }
                     set(id, .done(id == "apps" ? M("ejectflow.apps.confirmed.quit", stoppedApps) : M("ejectflow.processes.confirmed.stopped", stoppedDaemons)))
                 }
@@ -165,7 +205,7 @@ final class EjectFlow: @unchecked Sendable {
                     try cancellation.check()
                     let current = try prepare()
                     guard current.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
-                    guard current.canPrepare, current.processScope.isSubset(of: approved.processScope),
+                    guard current.canPrepare(approvedTasks: selectedTasks), current.processScope.isSubset(of: approved.processScope),
                           current.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(current) }
                     guard current.images.contains(image) else { continue }
                     try cancellation.check()
@@ -179,6 +219,76 @@ final class EjectFlow: @unchecked Sendable {
                 if final.requiresConfirmation { return previewOutcome(final) }
                 set("recheck", .done(M("ejectflow.no.open.files.found.for.the.current.user")))
             }
+            return try ejectWithRecovery(approved, systemOnly: systemOnly, started: started)
+        } catch {
+            let reason = cancellation.isCommitted ? M("ejectflow.it.is.not.confirmed.safe.to.unplug", error.displayMessage) : error.displayMessage
+            recordFailure(approved.target, stage: steps.first(where: { $0.state == .running })?.id ?? lastFailure?.stage ?? "validate", message: reason)
+            for step in steps where step.state == .running { set(step.id, .failed(reason)) }
+            return .aborted(reason + "\n" + completedDetail)
+        }
+    }
+
+    /// Read-only refresh keeps completed actions and pending quit requests.
+    func recheck(_ previous: EjectPlan) -> Outcome {
+        stoppedApps = previous.completedApps; stoppedDaemons = previous.completedDaemons
+        detachedImages = previous.completedImages; selectedTasks = previous.selectedTasks
+        requested = previous.requested; credited = previous.credited; lastFailure = previous.failure
+        do {
+            let fresh = try prepare()
+            guard fresh.target == previous.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
+            return previewOutcome(fresh, notice: previous.notice)
+        } catch { return .aborted(error.displayMessage) }
+    }
+
+    private func previewOutcome(_ plan: EjectPlan, notice: Message? = nil) -> Outcome {
+        var updated = plan
+        updated.completedApps = stoppedApps
+        updated.completedDaemons = stoppedDaemons
+        updated.completedImages = detachedImages
+        updated.selectedTasks = selectedTasks.intersection(plan.processScope)
+        updated.requested = requested
+        updated.credited = credited
+        updated.notice = notice
+        updated.failure = lastFailure
+        return .preview(updated)
+    }
+
+    private enum ReleaseState { case exited, released, waiting }
+
+    private func waitForRelease(_ expected: ProcessIdentity) throws -> ReleaseState {
+        let end = now().addingTimeInterval(quitTimeout)
+        while now() < end {
+            try cancellation.check()
+            guard let live = try inspector.identity(expected.pid) else { return .exited }
+            if live != expected { return .exited } // never signal its replacement
+            var occupancy = Occupancy(runner: scoped); occupancy.inspector = inspector
+            let report = try occupancy.fullScan(mountPoint: mountPoint, indexingOn: nil)
+            guard report.state == .complete else {
+                throw ProbeFailure(report.issues.first ?? M("occupancy.open.file.scan.incomplete"))
+            }
+            if !report.holders.contains(where: { $0.identity == expected }) { return .released }
+            sleep(0.1)
+        }
+        return .waiting
+    }
+
+    private func creditExit(_ identity: ProcessIdentity) {
+        guard let kind = requested[identity], credited.insert(identity).inserted else { return }
+        if kind == .guiApp { stoppedApps += 1 } else { stoppedDaemons += 1 }
+    }
+
+    private func recordFailure(_ target: EjectTarget, stage: String, message: Message, blockingPID: Int32? = nil) {
+        let failure = EjectFailure(target: target, stage: stage, message: message,
+                                  commandOutput: String(lastCommandOutput.prefix(16_384)),
+                                  blockingPID: blockingPID ?? EjectFailure.blockingPID(in: lastCommandOutput),
+                                  completedApps: stoppedApps, completedProcesses: stoppedDaemons,
+                                  completedImages: detachedImages)
+        lastFailure = failure
+        onFailure(failure)
+    }
+
+    private func ejectWithRecovery(_ approved: EjectPlan, systemOnly: Bool, started: Date) throws -> Outcome {
+        for attempt in 1...3 {
             try cancellation.check()
             guard try targets.target(at: mountPoint, runner: scoped) == approved.target else {
                 throw ProbeFailure(M("ejectflow.the.target.s.identity.or.related.volumes.changed.e989"))
@@ -187,6 +297,7 @@ final class EjectFlow: @unchecked Sendable {
             onCommit()
             set("unmount", .running)
             let r = try runner.run(Tool.diskutil, ["eject", approved.target.physicalDisk], timeout: Deadline.eject)
+            lastCommandOutput = r.text + "\n" + r.stderr
             set("verify", .running)
             let gone = try targets.isEjected(approved.target, runner: runner)
             if gone && (r.ok || r.timedOut) {
@@ -194,34 +305,40 @@ final class EjectFlow: @unchecked Sendable {
                 set("verify", .done(M("ejectflow.physical.disk.offline.related.volumes.unmounted")))
                 return .ejected(now().timeIntervalSince(started), stoppedApps: stoppedApps, stoppedDaemons: stoppedDaemons)
             }
-            if r.timedOut || r.ok {
+            if r.timedOut || r.cancelled || r.ok || gone {
                 throw ProbeFailure(M("ejectflow.eject.result.unknown.disk.not.verified.offline.do"))
             }
-            throw ProbeFailure(Self.dissenterMessage(r.text + "\n" + r.stderr) ?? M("ejectflow.macos.refused.to.eject.the.disk"))
-        } catch {
-            let reason = cancellation.isCommitted ? M("ejectflow.it.is.not.confirmed.safe.to.unplug", error.displayMessage) : error.displayMessage
-            for step in steps where step.state == .running { set(step.id, .failed(reason)) }
-            return .aborted(reason + "\n" + completedDetail)
+            // A definite refusal has completed. It is now safe to cancel/reconfirm.
+            cancellation.finishRefusedAttempt()
+            onSystemReturned()
+            let reason = Self.dissenterMessage(lastCommandOutput) ?? M("ejectflow.macos.refused.to.eject.the.disk")
+            recordFailure(approved.target, stage: "unmount", message: reason)
+            set("unmount", .failed(reason)); set("verify", .done(M("ejectflow.disk.still.connected")))
+            let fresh = try prepare()
+            guard fresh.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
+            // Never turn a dissenter PID alone into permission to signal it: only
+            // fresh file evidence and verified identity can enable preparation.
+            if !fresh.processScope.isEmpty || !fresh.images.isEmpty {
+                return previewOutcome(fresh, notice: reason)
+            }
+            guard !fresh.incomplete, !systemOnly || !approved.incomplete,
+                  EjectFailure.isTransientBusy(lastCommandOutput), attempt < 3 else {
+                throw ProbeFailure(reason)
+            }
+            set("unmount", .pending)
+            set("verify", .pending)
+            let retryAt = now().addingTimeInterval(Double(attempt))
+            while now() < retryAt {
+                try cancellation.check()
+                sleep(0.1)
+            }
+            let next = try prepare()
+            guard next.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
+            if next.incomplete || !next.processScope.isEmpty || !next.images.isEmpty {
+                return previewOutcome(next, notice: reason)
+            }
         }
-    }
-
-    private func previewOutcome(_ plan: EjectPlan) -> Outcome {
-        var updated = plan
-        updated.completedApps = stoppedApps
-        updated.completedDaemons = stoppedDaemons
-        updated.completedImages = detachedImages
-        return .preview(updated)
-    }
-
-    private func waitForExit(_ expected: ProcessIdentity) throws {
-        let end = now().addingTimeInterval(quitTimeout)
-        while now() < end {
-            try cancellation.check()
-            guard let live = try inspector.identity(expected.pid) else { return }
-            if live != expected { return } // the original instance ended; never signal its replacement
-            sleep(0.1)
-        }
-        throw ProbeFailure(M("ejectflow.is.still.running.handle.any.save.dialog.or", expected.appName ?? "PID \(expected.pid)"))
+        throw ProbeFailure(M("ejectflow.macos.refused.to.eject.the.disk"))
     }
 
     static func secs(_ t: TimeInterval) -> String {

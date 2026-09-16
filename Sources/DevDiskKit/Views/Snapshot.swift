@@ -33,7 +33,7 @@ public enum Snapshot {
             if let active = steps.first(where: { $0.state == .running }) { print(active.title.text) }
         }
         var outcome = flow.run(indexingOn: nil)
-        while case .preview(let plan) = outcome {
+        while case .preview(var plan) = outcome {
             print("弹出影响：\(plan.target.volume.name) · \(plan.target.volume.mount)")
             for volume in plan.target.affected { print("关联卷：\(volume.name) · \(volume.mount)") }
             for holder in plan.apps + plan.daemons + plan.manual {
@@ -42,9 +42,18 @@ public enum Snapshot {
             }
             plan.images.forEach { print("映像：\($0.path) · \($0.writable ? "需手动处理" : "只读")") }
             plan.issues.forEach { print(("检测不完整：" + $0).text) }
+            if let notice = plan.notice { print(notice.text) }
+            if let failure = plan.failure { print(failure.report) }
             guard isatty(STDIN_FILENO) == 1 else {
                 print("需要交互确认；未执行退出、停止或弹出操作。")
                 return false
+            }
+            let selectable = plan.manual.filter(\.canTerminateTask)
+            if !selectable.isEmpty && !plan.canPrepare {
+                print("任务终止可能丢失未保存进度。输入要终止的 PID（逗号分隔），或回车取消：")
+                let pids = Set((readLine() ?? "").split(separator: ",").compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) })
+                plan.selectedTasks = Set(selectable.compactMap(\.identity).filter { pids.contains($0.pid) })
+                guard plan.canPrepare else { return false }
             }
             if plan.canSystemOnly {
                 print("输入 system 仅尝试普通系统弹出；其他输入取消：")

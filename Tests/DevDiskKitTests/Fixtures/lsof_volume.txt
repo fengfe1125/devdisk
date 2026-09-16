@@ -1,0 +1,12 @@
+p37309
+cPython
+Lsakura
+f3
+n/Volumes/Developer
+p37310
+czsh
+Lsakura
+fcwd
+n/Volumes/Developer/Project with spaces
+f4
+n/Volumes/Developer/Project with spaces/file.txt

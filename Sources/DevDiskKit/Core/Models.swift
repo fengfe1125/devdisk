@@ -105,7 +105,7 @@ struct ConfigCheck: Identifiable {
 // MARK: - Occupancy
 
 enum HolderKind {
-    case guiApp        // asked to quit via AppleScript, never killed
+    case guiApp        // asked to quit via NSRunningApplication, never killed
     case daemon        // only stopped after explicit confirmation
     case manual        // foreground builds, VMs, or unknown processes
     case system        // not ours to touch; released by diskutil eject
@@ -125,11 +125,14 @@ struct Holder: Identifiable, Equatable {
     var user: String
     var kind: HolderKind
     var evidence: HolderEvidence
-    /// Bundle identifier, present for GUI apps so AppleScript can address them.
+    /// Bundle identifier of the running GUI application instance.
     var bundleID: String?
     var identity: ProcessIdentity? = nil
     var displayLabel: Message? = nil
     var displayName: String { displayLabel?.text ?? name }
+    var canTerminateTask: Bool {
+        kind == .manual && (openFileCount ?? 0) > 0 && identity?.canTerminateTask == true
+    }
 
     var openFileCount: Int? {
         if case .scanned(let n, _) = evidence { return n }
@@ -159,7 +162,7 @@ struct OccupancyReport {
 
     enum ScanDepth {
         case quick    // pgrep against a known list
-        case full     // lsof +D over the volume
+        case full     // lsof filesystem handle query
         case elevated // lsof as root via one-shot authorization
 
         var label: Message {

@@ -27,6 +27,9 @@ struct ConnectedView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let failure = store.ejectFailure {
                     EjectFailureBanner(message: failure) { store.dismissEjectFailure() }
+                    if let diagnostic = store.ejectDiagnostic {
+                        EjectFailureDetails(failure: diagnostic).padding(.horizontal, UI.hPad).padding(.bottom, 10)
+                    }
                     Divider1()
                 }
                 let sections = visibleSections(snap)

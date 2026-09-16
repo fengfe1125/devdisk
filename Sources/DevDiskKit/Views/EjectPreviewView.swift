@@ -18,6 +18,12 @@ struct EjectPreviewView: View {
                     Text(L("ejectpreviewview.so.far.apps.quit.services.stopped.images.ejected", plan.completedApps, plan.completedDaemons, plan.completedImages))
                         .font(.caption).foregroundStyle(.secondary).padding(UI.hPad)
                 }
+                if let notice = plan.notice {
+                    Text(notice).font(.caption).foregroundStyle(.orange).padding(UI.hPad)
+                }
+                if let failure = plan.failure {
+                    EjectFailureDetails(failure: failure).padding(.horizontal, UI.hPad)
+                }
                 if plan.target.multipleVolumes {
                     PanelSection(title: L("ejectpreviewview.ejecting.the.disk.affects.these.volumes")) {
                         ForEach(plan.target.affected, id: \.device) { volume in
@@ -36,7 +42,23 @@ struct EjectPreviewView: View {
                 }
                 group(L("ejectpreviewview.apps.to.request.to.quit"), plan.apps, note: L("ejectpreviewview.quitting.affects.the.entire.app.each.app.handles"))
                 group(L("ejectpreviewview.approved.background.services.to.stop"), plan.daemons, note: L("ejectpreviewview.services.may.still.be.working.after.confirmation.sends"))
-                group(L("ejectpreviewview.handle.manually"), plan.manual, note: L("ejectpreviewview.save.and.stop.these.tasks.then.scan.again"))
+                if !plan.manual.isEmpty {
+                    PanelSection(title: L("ejectpreviewview.other.tasks")) {
+                        Text(L("ejectpreviewview.terminate.warning")).font(.caption).foregroundStyle(.orange)
+                        ForEach(plan.manual) { holder in
+                            HolderRow(holder: holder)
+                            if holder.canTerminateTask, let identity = holder.identity {
+                                Toggle(L("ejectpreviewview.allow.terminate", holder.displayName), isOn: Binding(
+                                    get: { store.ejectPlan?.selectedTasks.contains(identity) == true },
+                                    set: { store.selectTask(identity, selected: $0) }
+                                )).toggleStyle(.checkbox).font(.caption)
+                            } else {
+                                Text(L("ejectpreviewview.save.and.stop.these.tasks.then.scan.again"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
                 if !plan.images.isEmpty {
                     PanelSection(title: L("ejectpreviewview.related.disk.images")) {
                         ForEach(Array(plan.images.enumerated()), id: \.offset) { _, image in
@@ -73,7 +95,7 @@ struct EjectPreviewFooter: View {
         VStack(spacing: 8) {
             if let plan = store.ejectPlan {
                 if plan.canPrepare {
-                    PrimaryButton(title: L("ejectpreviewview.confirm.and.eject"), symbol: "eject.fill") { store.confirmEject() }
+                    PrimaryButton(title: L(plan.needsContinuation ? "ejectpreviewview.continue.checking" : "ejectpreviewview.confirm.and.eject"), symbol: "eject.fill") { store.confirmEject() }
                 }
                 if plan.canSystemOnly {
                     PrimaryButton(title: L("ejectpreviewview.try.system.eject.only"), symbol: "eject") { store.confirmEject(systemOnly: true) }
@@ -87,5 +109,19 @@ struct EjectPreviewFooter: View {
                 }.buttonStyle(.bordered)
             }
         }.padding(.horizontal, UI.hPad).padding(.vertical, 11)
+    }
+}
+
+struct EjectFailureDetails: View {
+    let failure: EjectFailure
+    @EnvironmentObject var store: DiskStore
+    @ObservedObject private var language = LanguageStore.shared
+    var body: some View {
+        DisclosureGroup(L("ejectpreviewview.failure.details")) {
+            Text(failure.report).font(.system(size: 10, design: .monospaced))
+                .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            Button(L("ejectpreviewview.copy.failure")) { store.copy(failure.report) }
+                .buttonStyle(.bordered)
+        }.font(.caption)
     }
 }

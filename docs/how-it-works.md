@@ -15,7 +15,7 @@ Clicking **Safe Eject** first runs a read-only check. If nothing needs handling,
 - Timeouts, failures, and incomplete checks are shown as such. An unknown result is never shown as normal or as "nobody is using it".
 - Switching drives, re-checking, or a change in what's mounted invalidates the old task; old results can't overwrite a new drive.
 - **Stop** halts the remaining steps. Quit or stop requests that were already sent can't be undone.
-- Once the final system eject has been submitted, it can no longer be stopped; DevDisk waits for the result and verifies it. It never says the drive is safe to unplug without a verified success.
+- While a system eject is running, DevDisk waits for and verifies its result. Cancellation is available again between completed refused attempts. It never says the drive is safe to unplug without a verified success.
 
 ## What happens when you eject
 
@@ -24,7 +24,8 @@ Clicking **Safe Eject** first runs a read-only check. If nothing needs handling,
 | Nothing to prepare | Tries a normal `diskutil eject` and lets macOS decide |
 | Something it can handle | Shows the target drive, what it will act on, the file evidence, and the impact; acts after you confirm |
 | Incomplete check | Re-check, cancel, or explicitly choose "Only try a system eject" |
-| Simulators, foreground builds, unknown processes, writable or unknown disk images | Asks you to deal with them first, then re-check |
+| Current-user terminal tasks and unknown background tasks with verified identities | Offers unchecked termination choices, with a warning that work may be interrupted |
+| Unverifiable processes, writable or unknown disk images | Asks you to deal with them first, then re-check |
 | Several mounted volumes on the same physical drive | Lists the related volumes; only allows a normal system eject after explicit confirmation, without closing any processes |
 | The target changed, isn't an external physical drive, or its layout can't be confirmed | Stops and hands it back to you |
 
@@ -34,17 +35,19 @@ After you confirm, the order is: confirm the target and scope → ask GUI apps t
 
 ### What DevDisk may handle for you
 
-- **GUI apps**: must map to an actual running instance owned by the current user. DevDisk asks that instance to quit with `NSRunningApplication.terminate()`. The app handles its own save dialogs; if it refuses or keeps running, DevDisk stops and never escalates to a force quit.
-- **Specific services**: the current user's Gradle daemon, Kotlin daemon, and adb server receive SIGTERM only when there's real file-holding evidence and you've confirmed. Sending the signal doesn't mean the process exited; DevDisk waits for it to end.
-- **Handle yourself**: simulators, Gradle builds running in the foreground, unknown processes, and anything that can't be identified reliably never receive a termination signal. The specific services may also still be busy, and the preview reminds you of that.
+- **GUI apps**: must map to an actual running instance owned by the current user. DevDisk asks that instance to quit with `NSRunningApplication.terminate()`. The app handles its own save dialogs; if it refuses or keeps its files open, DevDisk offers Continue checking without sending the quit request again. It never escalates to a force quit.
+- **Specific services**: the current user's Gradle daemon, Kotlin daemon, and adb server receive SIGTERM only when there's real file-holding evidence and you've confirmed. Sending the signal does not mean it exited: DevDisk checks whether the process exited or released its handles. Only observed exits count as stopped processes.
+- **Other tasks**: verified current-user terminal tasks, foreground builds, and unknown background processes may receive SIGTERM only after you explicitly select them and confirm. Choices start unchecked. This can interrupt work or lose unsaved progress; unverified identities remain manual.
 - **System and other users' processes**: never touched. Inferred entries are shown separately from what the scan actually found.
 - **Disk images**: read-only images are detached normally after you confirm; writable images, or images whose read/write mode is unknown, are never detached automatically.
 
 A preview older than 30 seconds, or a change in the target's mount state, needs a new check. Confirming doesn't cover anything new: if new holders or images show up, DevDisk returns an updated preview and keeps the count of what it has already done.
 
+A refused system eject retains its raw error, stage, blocking PID, and completed actions locally for viewing or copying. A new user-process blocker needs fresh file evidence and confirmation. Only explicit temporary-busy errors permit up to three attempts; new occupants, permissions errors, timeouts, and unknown results stop automatic retry. Refreshing does not erase the failure.
+
 ## What DevDisk can and can't detect
 
-With normal permissions, DevDisk can only check the file handles visible to you. Even a complete scan doesn't mean it saw every user and system service. `lsof +D` can still time out because of a large volume, permissions, or file system problems; the limit is 30 seconds. An incomplete result can help explain a problem, but is never treated as complete enough to act on automatically.
+With normal permissions, DevDisk can only check the file handles visible to you. Even a complete scan doesn't mean it saw every user and system service. `lsof +f -- <mount>` queries open handles on the filesystem without traversing protected directories. The limit is 30 seconds, and permission, timeout, and parsing errors remain explicit. An incomplete result can help explain a problem, but is never treated as complete enough to act on automatically.
 
 Hardware information is aimed mainly at APFS/NVMe development drives; other file systems and enclosures may only report part of it. APFS setups spanning several physical drives, complex storage layouts, and startup disks never enter the automatic cleanup flow.
 
@@ -119,4 +122,4 @@ The CLI and the app use the same checks and rules. If anything will be affected,
 
 Other entry points: `--snapshot <output dir> [mount point]` renders with real probes; `--check-update [version]` checks the real GitHub API.
 
-The validation record for this version: [1.1.0 validation record](validation-1.1.0.md) (in Chinese).
+The validation record for this version: [1.3.0 eject recovery validation](validation-eject-recovery.md) (in Chinese). The [1.1.0 record](validation-1.1.0.md) covers the earlier safety implementation.

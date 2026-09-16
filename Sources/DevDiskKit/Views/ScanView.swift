@@ -26,7 +26,7 @@ struct ScanView: View {
                   title: L("scanview.can.stop.after.confirmation"), color: .secondary,
                   note: L("scanview.approved.background.services.may.still.be.working.no"))
 
-            group(kind: .manual, title: L("ejectpreviewview.handle.manually"), color: .orange,
+            group(kind: .manual, title: L("ejectpreviewview.other.tasks"), color: .orange,
                   note: L("scanview.emulators.foreground.builds.and.processes.with.unverified.identities"))
 
             group(kind: .system,

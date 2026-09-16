@@ -1,8 +1,66 @@
 import XCTest
+import Combine
 @testable import DevDiskKit
 
 @MainActor
 final class StoreReliabilityTests: XCTestCase {
+    private func wait(_ store: DiskStore, for operation: DiskStore.Operation) async {
+        let reached = expectation(description: "operation \(operation)")
+        var subscription: AnyCancellable?
+        subscription = store.$operation.filter { $0 == operation }.prefix(1).sink { _ in reached.fulfill() }
+        await fulfillment(of: [reached], timeout: 3)
+        subscription?.cancel()
+    }
+
+    func testTaskSelectionAndConfirmationUseSharedStoreState() async {
+        let h = FlowHarness(); h.add(executable: "/bin/zsh", args: "zsh")
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        let disk = drive("ReviewDisk", uuid: "review-uuid")
+        store.applyDiscovery([disk])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+        store.eject()
+        await wait(store, for: .awaitingConfirmation)
+        guard let identity = store.ejectPlan?.manual.first?.identity else { return XCTFail("missing task") }
+        XCTAssertTrue(store.ejectPlan?.selectedTasks.isEmpty == true)
+        XCTAssertFalse(store.ejectPlan?.canPrepare == true)
+        store.selectTask(identity, selected: true)
+        XCTAssertTrue(store.ejectPlan?.canPrepare == true)
+        store.confirmEject()
+        await wait(store, for: .finished)
+        guard case .ejected = store.screen else { return XCTFail("must eject") }
+        XCTAssertEqual(h.calls.filter { $0 == "kill -TERM 123" }.count, 1)
+    }
+
+    func testFailureDiagnosticSurvivesRefreshUntilDismissed() async {
+        let h = FlowHarness()
+        h.failures["diskutil eject disk90"] = .init(stdout: Data(), stderr: "Unmount was dissented by PID 333 (/usr/bin/tail)", exitCode: 1)
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        let disk = drive("ReviewDisk", uuid: "review-uuid")
+        store.discover = { _ in .init(value: [disk], state: .complete) }
+        store.probeVolume = { mount, _ in .success(Self.snapshot(mount, uuid: "review-uuid")) }
+        store.applyDiscovery([disk])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+        store.eject()
+        await wait(store, for: .finished)
+        // Failure delivery and terminal state use the same main actor.
+        for _ in 0..<10 { await Task.yield() }
+        let failure = store.ejectDiagnostic
+        XCTAssertEqual(failure?.blockingPID, 333)
+        XCTAssertTrue(failure?.report.contains("/usr/bin/tail") == true)
+        let refreshed = expectation(description: "refreshed")
+        store.probeVolume = { mount, _ in
+            refreshed.fulfill()
+            return .success(Self.snapshot(mount, uuid: "review-uuid"))
+        }
+        store.refresh(force: true)
+        await fulfillment(of: [refreshed], timeout: 3)
+        XCTAssertEqual(store.ejectDiagnostic, failure)
+        XCTAssertNotNil(store.ejectFailure)
+        store.dismissEjectFailure()
+        XCTAssertNil(store.ejectDiagnostic)
+        XCTAssertNil(store.ejectFailure)
+    }
+
     private func defaults() -> UserDefaults {
         let name = "devdisk.tests." + UUID().uuidString
         let d = UserDefaults(suiteName: name)!

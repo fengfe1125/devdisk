@@ -47,7 +47,7 @@ final class FlowHarness: CommandRunner, @unchecked Sendable {
         if path == Tool.lsof {
             let rows = files.keys.sorted().filter { processes.live[$0] != nil && !(files[$0] ?? []).isEmpty }
             return output(rows.map { pid in
-                "p\(pid)\ncprocess\nLexample\n" + (files[pid] ?? []).map { "n" + $0 + "\n" }.joined()
+                "p\(pid)\ncprocess\nLexample\n" + (files[pid] ?? []).map { "f3\nn" + $0 + "\n" }.joined()
             }.joined(), code: rows.isEmpty ? 1 : 0)
         }
         if path == Tool.hdiutil && arguments == ["info", "-plist"] {
