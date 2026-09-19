@@ -7,6 +7,8 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
     let mount = "/Volumes/DevDisk 演示盘"
     private var live: [Int32: ProcessIdentity] = [:]
     private(set) var gone = false
+    private var unmounted = false
+    private var imageDetached = false
     init(scenario: String) {
         self.scenario = scenario
         for index in 1...(scenario.contains("long") ? 8 : 1) {
@@ -42,10 +44,13 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
         if !scenario.contains("running") && !scenario.contains("save") { live.removeValue(forKey: identity.pid) }
     }
     func target(at mount: String, runner: CommandRunner) throws -> EjectTarget { targetValue }
+    func validateUnmounted(_ target: EjectTarget, runner: CommandRunner) throws {
+        guard target == targetValue else { throw ProbeFailure("demo target changed") }
+    }
     func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
                            timeout: TimeInterval) -> EjectVerification {
-        .init(state: gone ? .offline : .present, physicalDiskPresent: !gone,
-              mountedVolumes: gone ? [] : target.affected,
+        .init(state: gone ? .offline : unmounted ? .unmounted : .present, physicalDiskPresent: !gone,
+              mountedVolumes: gone || unmounted ? [] : target.affected,
               relatedMountsKnown: true, issue: nil)
     }
     func run(_ path: String, _ args: [String]) throws -> CommandResult {
@@ -55,15 +60,31 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
         switch path {
         case Tool.ps: return result("1 root /sbin/launchd\n" + live.keys.map { "\($0) demo /Applications/Demo.app/Contents/MacOS/editor" }.joined(separator: "\n"))
         case Tool.lsof:
+            if args.last != mount { return result("", code: 1) }
             if scenario.contains("unknown") { return .init(stdout: Data(), stderr: "演示：检测超时，结果不完整", exitCode: -1, timedOut: true) }
             return result(live.keys.sorted().map { "p\($0)\nceditor\nLdemo\nf3\nn\(mount)/Projects/Example-\($0)/Sources/document.swift\n" }.joined(), code: live.isEmpty ? 1 : 0)
         case Tool.hdiutil:
+            if args.first == "detach", scenario.contains("image") {
+                if !args.contains("-force") || scenario.contains("forcefail") { return result("image busy", code: 1) }
+                imageDetached = true; return result("simulated detach")
+            }
+            if scenario.contains("image"), !imageDetached, args == ["info", "-plist"] {
+                let rows: [[String: Any]] = (1...(scenario.contains("long") ? 8 : 1)).map { i in
+                    ["image-path": mount + "/Applications/CoreSimulatorData/Simulator-\(i).sparseimage",
+                     "writeable": true, "system-entities": [["dev-entry": "/dev/disk\(910 + i)", "mount-point": "/Volumes/Simulator-\(i)"]]]
+                }
+                return .init(stdout: try PropertyListSerialization.data(fromPropertyList: ["images": rows], format: .xml, options: 0), stderr: "", exitCode: 0)
+            }
             guard args == ["info", "-plist"] else { throw ProbeFailure("演示不支持此操作") }
             return .init(stdout: try PropertyListSerialization.data(fromPropertyList: ["images": []], format: .xml, options: 0), stderr: "", exitCode: 0)
         case Tool.diskutil:
+            if args.prefix(2) == ["info", "-plist"], let device = args.last, device.hasPrefix("/dev/disk9") {
+                return .init(stdout: try PropertyListSerialization.data(fromPropertyList: ["DeviceIdentifier": String(device.dropFirst(5))], format: .xml, options: 0), stderr: "", exitCode: 0)
+            }
+            if args == ["unmountDisk", "force", "disk900"] { unmounted = true; return result("simulated unmount") }
             guard args == ["eject", "disk900"] else { throw ProbeFailure("演示不支持此操作") }
             if scenario.contains("waiting") { Thread.sleep(forTimeInterval: 8) }
-            if scenario.contains("refusal") { return .init(stdout: Data(), stderr: "Unmount was dissented by PID 90099 (/usr/libexec/demo-service)", exitCode: 1) }
+            if scenario.contains("refusal") && !unmounted { return .init(stdout: Data(), stderr: "Unmount was dissented by PID 90099 (/usr/libexec/demo-service)", exitCode: 1) }
             gone = true; return result("simulated eject")
         case Tool.kill:
             guard args.count == 2, args[0] == "-TERM", let pid = Int32(args[1]), live[pid] != nil else { throw ProbeFailure("演示不支持此操作") }
@@ -86,6 +107,7 @@ enum DemoFixture {
         store.makeFlow = { _, mount, token in
             let flow = EjectFlow(runner: machine, mountPoint: mount, cancellation: token)
             flow.targets = machine; flow.inspector = machine
+            if scenario.contains("image") { flow.verificationTimeout = 0.5 }
             if scenario.contains("save") { flow.quitTimeout = 1 }
             return flow
         }

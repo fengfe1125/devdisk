@@ -85,7 +85,7 @@ final class LocalizationTests: XCTestCase {
         h.processes.refuseQuit = true
         let flow = h.flow
         let plan = try flow.prepare()
-        let outcome = flow.execute(plan, systemOnly: false)
+        let outcome = flow.execute(plan, mode: .prepared)
         guard case .preview(let pending) = outcome, let message = pending.notice else { return XCTFail("Expected pending quit") }
         let calls = h.calls
         for language in [AppLanguage.english, .chinese, .english] {

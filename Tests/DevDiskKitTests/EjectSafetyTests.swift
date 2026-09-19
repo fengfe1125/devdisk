@@ -16,7 +16,7 @@ final class EjectSafetyTests: XCTestCase {
         XCTAssertEqual(plan.apps.count, 1)
         XCTAssertTrue(h.processes.quits.isEmpty)
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("diskutil eject") })
-        guard case .ejected(_, let apps, _) = f.execute(plan, systemOnly: false) else { return XCTFail("confirmed plan should eject") }
+        guard case .ejected(_, let apps, _, _) = f.execute(plan, mode: .prepared) else { return XCTFail("confirmed plan should eject") }
         XCTAssertEqual(apps, 1)
         XCTAssertEqual(h.processes.quits, [123])
     }
@@ -25,7 +25,7 @@ final class EjectSafetyTests: XCTestCase {
         let f = h.flow, plan = try f.prepare()
         XCTAssertEqual(plan.daemons.count, 1)
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
-        guard case .ejected(_, _, let stopped) = f.execute(plan, systemOnly: false) else { return XCTFail("must eject") }
+        guard case .ejected(_, _, let stopped, _) = f.execute(plan, mode: .prepared) else { return XCTFail("must eject") }
         XCTAssertEqual(stopped, 1)
         XCTAssertTrue(h.calls.contains("kill -TERM 123"))
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("pkill") || $0.contains("-KILL") })
@@ -36,7 +36,7 @@ final class EjectSafetyTests: XCTestCase {
             let h = FlowHarness(); h.add(executable: "/usr/bin/" + exe, args: args)
             let f = h.flow, plan = try f.prepare()
             XCTAssertEqual(plan.manual.count, 1)
-            guard case .preview = f.execute(plan, systemOnly: false) else { XCTFail("must remain preview"); continue }
+            guard case .preview = f.execute(plan, mode: .prepared) else { XCTFail("must remain preview"); continue }
             XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("diskutil eject") })
         }
     }
@@ -44,11 +44,13 @@ final class EjectSafetyTests: XCTestCase {
         let h = FlowHarness(); h.add(uid: getuid() + 1)
         let f = h.flow, plan = try f.prepare()
         XCTAssertTrue(plan.daemons.isEmpty)
-        _ = f.execute(plan, systemOnly: false)
+        _ = f.execute(plan, mode: .prepared)
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
     }
     func testPrefixCollisionIsIncompleteNotAnAction() throws {
         let h = FlowHarness(); h.add(paths: [FlowHarness.mount + "Other/a"])
+        h.failures["lsof -nP +w -F pcLfn +f -- " + FlowHarness.mount] = .init(
+            stdout: Data("p123\ncprocess\nLexample\nf3\nn\(FlowHarness.mount)Other/a\n".utf8), stderr: "", exitCode: 0)
         let p = try h.flow.prepare()
         XCTAssertTrue(p.daemons.isEmpty)
         XCTAssertTrue(p.incomplete)
@@ -59,7 +61,7 @@ final class EjectSafetyTests: XCTestCase {
         h.failures[key] = .init(stdout: Data(), stderr: "", exitCode: 0, timedOut: true)
         let f = h.flow, plan = try f.prepare()
         XCTAssertTrue(plan.incomplete)
-        guard case .ejected = f.execute(plan, systemOnly: true) else { return XCTFail("system only") }
+        guard case .ejected = f.execute(plan, mode: .systemOnly) else { return XCTFail("system only") }
         XCTAssertTrue(h.processes.quits.isEmpty)
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("hdiutil detach") })
     }
@@ -81,7 +83,7 @@ final class EjectSafetyTests: XCTestCase {
     func testTERMReturnDoesNotMeanProcessExited() throws {
         let h = FlowHarness(); h.add(); h.stopWorks = false
         let f = h.flow, p = try f.prepare()
-        guard case .preview(let pending) = f.execute(p, systemOnly: false) else { return XCTFail("must wait") }
+        guard case .preview(let pending) = f.execute(p, mode: .prepared) else { return XCTFail("must wait") }
         XCTAssertTrue(pending.notice?.render(.chinese).contains("仍在运行") == true)
         XCTAssertEqual(pending.completedDaemons, 0)
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("diskutil eject") })
@@ -89,35 +91,35 @@ final class EjectSafetyTests: XCTestCase {
     func testRefusedAppQuitNeverEscalates() throws {
         let h = FlowHarness(); h.add(app: "review.editor"); h.processes.refuseQuit = true
         let f = h.flow, p = try f.prepare()
-        guard case .preview = f.execute(p, systemOnly: false) else { return XCTFail("must wait") }
+        guard case .preview = f.execute(p, mode: .prepared) else { return XCTFail("must wait") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("diskutil eject") })
     }
     func testPIDReuseReturnsNewPreview() throws {
         let h = FlowHarness(); h.add()
         let f = h.flow, p = try f.prepare()
         h.processes.live[123] = .init(pid: 123, uid: getuid(), startedSeconds: 99, startedMicros: 0, executable: "/usr/bin/java")
-        guard case .preview = f.execute(p, systemOnly: false) else { return XCTFail("must reconfirm new identity") }
+        guard case .preview = f.execute(p, mode: .prepared) else { return XCTFail("must reconfirm new identity") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
     }
     func testNewHolderAfterConfirmationCannotExpandScope() throws {
         let h = FlowHarness(); h.add()
         let f = h.flow, p = try f.prepare()
         h.add(pid: 456)
-        guard case .preview(let new) = f.execute(p, systemOnly: false) else { return XCTFail("must reconfirm") }
+        guard case .preview(let new) = f.execute(p, mode: .prepared) else { return XCTFail("must reconfirm") }
         XCTAssertEqual(new.daemons.count, 2)
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
     }
     func testExpiredPlanRepreparesWithoutEffects() throws {
         let h = FlowHarness(); h.add()
         let f = h.flow, p = try f.prepare(); h.clock += 31
-        guard case .preview = f.execute(p, systemOnly: false) else { return XCTFail("expired") }
+        guard case .preview = f.execute(p, mode: .prepared) else { return XCTFail("expired") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
     }
     func testCancelAfterQuitPreventsDaemonAndEject() throws {
         let h = FlowHarness(); h.add(app: "review.editor"); h.add(pid: 456)
         h.processes.onQuit = { h.cancellation.cancel() }
         let f = h.flow, p = try f.prepare()
-        guard case .aborted = f.execute(p, systemOnly: false) else { return XCTFail("cancelled") }
+        guard case .aborted = f.execute(p, mode: .prepared) else { return XCTFail("cancelled") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("diskutil eject") })
     }
     func testCommitPreventsMisleadingCancel() throws {
@@ -127,14 +129,15 @@ final class EjectSafetyTests: XCTestCase {
         XCTAssertFalse(h.cancellation.isCancelled)
         XCTAssertTrue(h.cancellation.isCommitted)
     }
-    func testWritableAndUnknownAccessImagesNeverDetach() throws {
+    func testWritableAndUnknownAccessImagesDetachNormallyAfterConfirmation() throws {
         for known in [true, false] {
             let h = FlowHarness()
             h.images = [.init(path: FlowHarness.mount + "/work.dmg", writable: known, accessKnown: known, devEntries: ["/dev/disk91"], mountPoints: [])]
             let f = h.flow, p = try f.prepare()
-            XCTAssertFalse(p.canPrepare)
-            guard case .preview = f.execute(p, systemOnly: false) else { return XCTFail("manual") }
-            XCTAssertFalse(h.calls.contains { $0.hasPrefix("hdiutil detach") || $0.hasPrefix("diskutil eject") })
+            XCTAssertTrue(p.canPrepare)
+            guard case .ejected = f.execute(p, mode: .prepared) else { return XCTFail("normal eject") }
+            XCTAssertTrue(h.calls.contains("hdiutil detach /dev/disk91"))
+            XCTAssertFalse(h.calls.contains { $0.contains("force") })
         }
     }
     func testReadOnlyImageDetachesOnlyAfterConfirmation() throws {
@@ -142,14 +145,14 @@ final class EjectSafetyTests: XCTestCase {
         h.images = [.init(path: FlowHarness.mount + "/install.dmg", writable: false, devEntries: ["/dev/disk91"], mountPoints: [])]
         let f = h.flow, p = try f.prepare()
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("hdiutil detach") })
-        guard case .ejected = f.execute(p, systemOnly: false) else { return XCTFail("ejected") }
+        guard case .ejected = f.execute(p, mode: .prepared) else { return XCTFail("ejected") }
         XCTAssertTrue(h.calls.contains("hdiutil detach /dev/disk91"))
     }
     func testDetachFailureStopsExecution() throws {
         let h = FlowHarness(); h.detachWorks = false
         h.images = [.init(path: FlowHarness.mount + "/install.dmg", writable: false, devEntries: ["/dev/disk91"], mountPoints: [])]
         let f = h.flow, p = try f.prepare()
-        guard case .aborted = f.execute(p, systemOnly: false) else { return XCTFail("abort") }
+        guard case .aborted = f.execute(p, mode: .prepared) else { return XCTFail("abort") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("diskutil eject") })
     }
     func testMultiVolumeOnlyAllowsExplicitSystemEject() throws {
@@ -160,7 +163,7 @@ final class EjectSafetyTests: XCTestCase {
         let f = h.flow, p = try f.prepare()
         XCTAssertFalse(p.canPrepare)
         XCTAssertTrue(p.canSystemOnly)
-        guard case .ejected = f.execute(p, systemOnly: true) else { return XCTFail("system") }
+        guard case .ejected = f.execute(p, mode: .systemOnly) else { return XCTFail("system") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
     }
     func testTargetChangeAbortsBeforeActions() throws {
@@ -168,7 +171,7 @@ final class EjectSafetyTests: XCTestCase {
         let f = h.flow, p = try f.prepare()
         let t = h.targetInspector.current
         h.targetInspector.current = .init(volume: .init(name: "Other", mount: t.volume.mount, device: t.volume.device, uuid: "replacement"), physicalDisk: t.physicalDisk, affected: t.affected)
-        guard case .aborted = f.execute(p, systemOnly: false) else { return XCTFail("target changed") }
+        guard case .aborted = f.execute(p, mode: .prepared) else { return XCTFail("target changed") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") || $0.hasPrefix("diskutil eject") })
     }
     func testEjectSuccessWithoutVerificationStaysPendingAndDoesNotSaySafe() {
@@ -202,7 +205,7 @@ final class EjectSafetyTests: XCTestCase {
         h.images = [.init(path: FlowHarness.mount + "/installer.dmg", writable: false, devEntries: ["/dev/disk91"], mountPoints: [])]
         h.processes.onQuit = { h.calls.append("GUI quit") }
         let f = h.flow, p = try f.prepare()
-        guard case .ejected = f.execute(p, systemOnly: false) else { return XCTFail("must finish") }
+        guard case .ejected = f.execute(p, mode: .prepared) else { return XCTFail("must finish") }
         let app = try XCTUnwrap(h.calls.firstIndex(of: "GUI quit"))
         let service = try XCTUnwrap(h.calls.firstIndex(of: "kill -TERM 456"))
         let image = try XCTUnwrap(h.calls.firstIndex(of: "hdiutil detach /dev/disk91"))
@@ -213,10 +216,10 @@ final class EjectSafetyTests: XCTestCase {
         let h = FlowHarness(); h.add(app: "review.editor")
         h.processes.onQuit = { h.add(pid: 456) }
         let f = h.flow, p = try f.prepare()
-        guard case .preview(let next) = f.execute(p, systemOnly: false) else { return XCTFail("new holder requires preview") }
+        guard case .preview(let next) = f.execute(p, mode: .prepared) else { return XCTFail("new holder requires preview") }
         XCTAssertEqual(next.completedApps, 1)
         let nextFlow = h.flow
-        guard case .ejected(_, let apps, let daemons) = nextFlow.execute(next, systemOnly: false) else { return XCTFail("confirmed update") }
+        guard case .ejected(_, let apps, let daemons, _) = nextFlow.execute(next, mode: .prepared) else { return XCTFail("confirmed update") }
         XCTAssertEqual(apps, 1); XCTAssertEqual(daemons, 1)
     }
     func testSelectedVolumeCannotBeReplacedBeforePreflight() {

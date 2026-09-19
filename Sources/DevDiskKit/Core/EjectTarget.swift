@@ -70,6 +70,7 @@ struct EjectVerification: Equatable {
 
 protocol TargetInspecting {
     func target(at mount: String, runner: CommandRunner) throws -> EjectTarget
+    func validateUnmounted(_ target: EjectTarget, runner: CommandRunner) throws
     func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
                            timeout: TimeInterval) -> EjectVerification
 }
@@ -147,6 +148,33 @@ struct SystemTargetInspector: TargetInspecting {
                      affected: affected.sorted { $0.mount < $1.mount })
     }
 
+    /// After unmount, the old mount path is gone. Re-resolve the original UUIDs and
+    /// physical-store mapping by device, and reject new mounted siblings/reused IDs.
+    func validateUnmounted(_ target: EjectTarget, runner: CommandRunner) throws {
+        guard !target.affected.isEmpty else { throw ProbeFailure(M("ejectforce.target.changed")) }
+        for volume in target.affected {
+            let d = try info(volume.device, runner: runner)
+            guard !volume.uuid.isEmpty, d["VolumeUUID"] as? String == volume.uuid,
+                  d["DeviceIdentifier"] as? String == volume.device,
+                  d["RemovableMediaOrExternalDevice"] as? Bool == true,
+                  try physical(d, runner: runner) == target.physicalDisk,
+                  (d["MountPoint"] as? String).map({ $0.isEmpty || $0 == volume.mount }) ?? true else {
+                throw ProbeFailure(M("ejectforce.target.changed"))
+            }
+        }
+        let paths = try mountedPaths()
+        for path in paths {
+            let d = try info(path, runner: runner)
+            if d["BusProtocol"] as? String == "Disk Image" { continue }
+            if try physical(d, runner: runner) == target.physicalDisk {
+                guard target.affected.contains(try volume(d)) else {
+                    throw ProbeFailure(M("ejectforce.target.changed"))
+                }
+            }
+        }
+        guard Set(paths) == Set(try mountedPaths()) else { throw ProbeFailure(M("ejectforce.target.changed")) }
+    }
+
     func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
                            timeout: TimeInterval) -> EjectVerification {
         var diskPresent: Bool?
@@ -166,6 +194,18 @@ struct SystemTargetInspector: TargetInspecting {
         do {
             let paths = Set(try mountedPaths())
             mounted = target.affected.filter { paths.contains($0.mount) }
+            // A volume can remount at a different path or a new sibling can appear.
+            // Check every additional mount instead of treating missing old paths as proof.
+            if diskPresent == true {
+                for path in paths where !target.affected.contains(where: { $0.mount == path }) {
+                    let d = try info(path, runner: runner)
+                    if d["BusProtocol"] as? String == "Disk Image" { continue }
+                    if try physical(d, runner: runner) == target.physicalDisk {
+                        mounted.append(try volume(d))
+                    }
+                }
+            }
+            guard Set(try mountedPaths()) == paths else { throw ProbeFailure(M("ejectforce.target.changed")) }
             mountsKnown = true
         } catch {
             issues.append(error.displayMessage)

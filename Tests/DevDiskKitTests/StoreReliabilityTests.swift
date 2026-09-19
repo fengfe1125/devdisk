@@ -106,6 +106,43 @@ final class StoreReliabilityTests: XCTestCase {
         XCTAssertEqual(store.screen, .connected)
     }
 
+    func testForceUIRequiresFreshReviewAndIgnoresRepeatedClicks() async {
+        let h = FlowHarness()
+        h.images = [.init(path: FlowHarness.mount + "/writable.sparseimage", writable: true,
+                          devEntries: ["/dev/disk91"], mountPoints: [])]
+        h.failures["hdiutil detach /dev/disk91"] = .init(stdout: Data(), stderr: "busy", exitCode: 1)
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        let disk = drive("ReviewDisk", uuid: "review-uuid")
+        store.discover = { _ in .init(value: h.targetInspector.gone ? [] : [disk], state: .complete) }
+        store.probeVolume = { mount, _ in .success(Self.snapshot(mount, uuid: "review-uuid")) }
+        store.applyDiscovery([disk])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+        store.eject()
+        await wait(store, for: .awaitingConfirmation)
+        XCTAssertFalse(store.canOfferForce)
+        store.confirmEject(mode: .force)
+        XCTAssertEqual(store.operation, .awaitingConfirmation)
+        store.confirmEject()
+        await wait(store, for: .finished)
+        XCTAssertTrue(store.canOfferForce)
+        store.requestForceEject()
+        store.requestForceEject()
+        await wait(store, for: .awaitingConfirmation)
+        XCTAssertTrue(store.ejectPlan?.forceConfirmation == true)
+        XCTAssertFalse(h.calls.contains { $0.contains("force") })
+        store.cancelEject()
+        XCTAssertFalse(h.calls.contains { $0.contains("force") })
+        store.requestForceEject()
+        await wait(store, for: .awaitingConfirmation)
+        store.confirmEject(mode: .force)
+        store.confirmEject(mode: .force)
+        await wait(store, for: .finished)
+        guard case .ejected = store.screen else { return XCTFail("completed") }
+        XCTAssertTrue(store.forceWasUsed)
+        XCTAssertEqual(h.calls.filter { $0 == "hdiutil detach /dev/disk91 -force" }.count, 1)
+        XCTAssertEqual(h.calls.filter { $0 == "diskutil unmountDisk force disk90" }.count, 1)
+    }
+
     private func defaults() -> UserDefaults {
         let name = "devdisk.tests." + UUID().uuidString
         let d = UserDefaults(suiteName: name)!

@@ -23,19 +23,22 @@ struct ConnectedView: View {
     }
 
     var body: some View {
-        if let snap = store.snapshot {
-            VStack(alignment: .leading, spacing: 0) {
-                if let failure = store.ejectFailure {
-                    EjectFailureBanner(message: failure,
-                                       pending: store.ejectVerificationPending,
-                                       onRecheck: { store.reverifyEject() }) {
-                        store.dismissEjectFailure()
-                    }
-                    if let diagnostic = store.ejectDiagnostic {
-                        EjectFailureDetails(failure: diagnostic).padding(.horizontal, UI.hPad).padding(.bottom, 10)
-                    }
-                    Divider1()
+        VStack(alignment: .leading, spacing: 0) {
+            if let failure = store.ejectFailure {
+                EjectFailureBanner(message: failure, pending: store.ejectVerificationPending,
+                                   onRecheck: { store.reverifyEject() }) {
+                    store.dismissEjectFailure()
                 }
+                if let diagnostic = store.ejectDiagnostic {
+                    EjectFailureDetails(failure: diagnostic).padding(.horizontal, UI.hPad).padding(.bottom, 10)
+                }
+                if store.canOfferForce {
+                    Button(L("ejectforce.action")) { store.requestForceEject() }
+                        .buttonStyle(.bordered).padding(.horizontal, UI.hPad).padding(.bottom, 10)
+                }
+                Divider1()
+            }
+            if let snap = store.snapshot {
                 let sections = visibleSections(snap)
                 if sections.isEmpty {
                     allHidden
@@ -45,15 +48,15 @@ struct ConnectedView: View {
                         piece.view
                     }
                 }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(store.lastError?.text ?? L("connectedview.reading"))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
             }
-        } else {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(store.lastError?.text ?? L("connectedview.reading"))
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 28)
         }
     }
 
@@ -315,6 +318,7 @@ struct ConnectedFooter: View {
     var body: some View {
         VStack(spacing: 7) {
             PrimaryButton(title: L("connectedview.safely.eject"), symbol: "eject.fill") { store.eject() }
+                .disabled(store.ejectVerificationPending)
             Text(hint)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)

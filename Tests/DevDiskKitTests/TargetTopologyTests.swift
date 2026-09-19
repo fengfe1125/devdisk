@@ -91,6 +91,33 @@ final class TargetTopologyTests: XCTestCase {
         XCTAssertTrue(offline.confirmedOffline)
         XCTAssertTrue(offline.mountedVolumes.isEmpty)
     }
+    func testUnmountedTargetUsesUUIDAndPhysicalMappingWithoutOldMountPath() throws {
+        let t = FakeTargetInspector().current, runner = MockCommandRunner()
+        var data = fields(mount: t.volume.mount, uuid: t.volume.uuid)
+        data.removeValue(forKey: "MountPoint")
+        runner.stub("diskutil info -plist disk90s1", data: try plist(data))
+        let probe = SystemTargetInspector(mountedPaths: { [] })
+        XCTAssertNoThrow(try probe.validateUnmounted(t, runner: runner))
+        data["VolumeUUID"] = "replacement"
+        runner.stub("diskutil info -plist disk90s1", data: try plist(data))
+        XCTAssertThrowsError(try probe.validateUnmounted(t, runner: runner))
+    }
+    func testNewMountedSiblingBlocksPreviouslyConfirmedForceScope() throws {
+        let t = FakeTargetInspector().current, runner = MockCommandRunner()
+        runner.stub("diskutil info -plist disk90s1", data: try plist(fields(mount: t.volume.mount, uuid: t.volume.uuid)))
+        runner.stub("diskutil info -plist /Volumes/New", data: try plist(fields(mount: "/Volumes/New", device: "disk90s2", uuid: "new")))
+        let probe = SystemTargetInspector(mountedPaths: { ["/Volumes/New"] })
+        XCTAssertThrowsError(try probe.validateUnmounted(t, runner: runner))
+    }
+    func testVerificationDetectsVolumeRemountedAtAnotherPath() throws {
+        let target = FakeTargetInspector().current, runner = MockCommandRunner()
+        runner.stub("diskutil list -plist", data: try plist(["AllDisks": ["disk0", "disk90"]]))
+        runner.stub("diskutil info -plist /Volumes/Moved", data: try plist(fields(mount: "/Volumes/Moved", uuid: target.volume.uuid)))
+        let probe = SystemTargetInspector(mountedPaths: { ["/Volumes/Moved"] })
+        let result = probe.ejectVerification(target, runner: runner, timeout: 1)
+        XCTAssertEqual(result.state, .present)
+        XCTAssertEqual(result.mountedVolumes.first?.mount, "/Volumes/Moved")
+    }
     func testReadOnlyRealTargetWhenExplicitlyConfigured() throws {
         guard let mount = ProcessInfo.processInfo.environment["DEVDISK_READONLY_TARGET"] else {
             throw XCTSkip("opt-in read-only hardware check")

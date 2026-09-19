@@ -16,13 +16,15 @@ struct DiskImage: Equatable {
     /// Mount points, empty when the image is attached but not mounted.
     var mountPoints: [String]
 
+    var volumeUUIDs: [String: String] = [:]
+
     var name: String { (path as NSString).lastPathComponent }
     var isMounted: Bool { !mountPoints.isEmpty }
 
     /// The whole-disk entry (`/dev/disk13`), which is what detach wants.
     var wholeDisk: String? {
         devEntries.first { $0.range(of: #"^/dev/disk\d+$"#, options: .regularExpression) != nil }
-            ?? devEntries.first
+
     }
 }
 
@@ -33,15 +35,56 @@ struct DiskImageProbe {
         self.runner = runner
     }
 
-    /// Attached images whose backing file lives on `mountPoint`.
+    /// Include dependencies on all affected volumes, then images backed by those images.
+    /// The result is ordered children first so no backing volume is removed too early.
     func images(on mountPoint: String) throws -> [DiskImage] {
-        let r = try runner.run(Tool.hdiutil, ["info", "-plist"],
-                               timeout: Deadline.quick)
+        try images(on: [mountPoint])
+    }
+
+    func images(on mounts: [String]) throws -> [DiskImage] {
+        let r = try runner.run(Tool.hdiutil, ["info", "-plist"], timeout: Deadline.quick)
         try r.requireSuccess("hdiutil")
-        guard let root = VolumeProbe.plist(r.stdout), root["images"] is [[String: Any]] else {
+        guard let root = VolumeProbe.plist(r.stdout), let rows = root["images"] as? [[String: Any]],
+              rows.allSatisfy({ $0["image-path"] is String && $0["system-entities"] is [[String: Any]] }) else {
             throw ProbeFailure(M("diskimages.could.not.parse.hdiutil.output"))
         }
-        return Self.parse(r.stdout, under: mountPoint)
+        var remaining = Self.parse(r.stdout, under: "/")
+        var roots = mounts
+        var related: [DiskImage] = []
+        while let index = remaining.firstIndex(where: { image in
+            roots.contains { Self.contains(image.path, under: $0) }
+        }) {
+            var image = remaining.remove(at: index)
+            guard image.wholeDisk != nil else { throw ProbeFailure(M("ejectforce.image.identity.unknown")) }
+            // hdiutil can omit APFS mount points. Resolve every exported device, including
+            // synthesized APFS volumes, rather than assuming the image has no mounts.
+            for device in image.devEntries {
+                guard device.range(of: #"^/dev/disk\d+(s\d+)*$"#, options: .regularExpression) != nil else {
+                    throw ProbeFailure(M("ejectforce.image.identity.unknown"))
+                }
+                let info = try runner.run(Tool.diskutil, ["info", "-plist", device], timeout: Deadline.quick)
+                try info.requireSuccess("diskutil info")
+                guard let value = VolumeProbe.plist(info.stdout),
+                      value["DeviceIdentifier"] as? String == String(device.dropFirst(5)) else {
+                    throw ProbeFailure(M("ejectforce.image.identity.unknown"))
+                }
+                if let uuid = value["VolumeUUID"] as? String { image.volumeUUIDs[device] = uuid }
+                if let mount = value["MountPoint"] as? String, !mount.isEmpty {
+                    image.mountPoints.append(mount)
+                }
+            }
+            image.mountPoints = Array(Set(image.mountPoints)).sorted()
+            guard !image.mountPoints.contains("/") else { throw ProbeFailure(M("ejectforce.image.identity.unknown")) }
+            roots += image.mountPoints
+            related.append(image)
+        }
+        return related.reversed()
+    }
+
+    static func contains(_ path: String, under mount: String) -> Bool {
+        let path = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        let mount = URL(fileURLWithPath: mount).resolvingSymlinksInPath().standardizedFileURL.path
+        return path.hasPrefix(mount == "/" ? "/" : mount + "/")
     }
 
     static func parse(_ data: Data, under mountPoint: String) -> [DiskImage] {
@@ -69,13 +112,23 @@ struct DiskImageProbe {
         }
     }
 
-    /// Detaches one image. Read-only images carry no user data, so the eject flow
-    /// handles those itself; writable ones are left for the user to decide about.
-    @discardableResult
-    func detach(_ image: DiskImage) -> Bool {
-        guard let dev = image.wholeDisk else { return false }
-        let r = try? runner.run(Tool.hdiutil, ["detach", dev],
-                                timeout: Deadline.eject)
-        return r?.ok == true
+    func areDetached(_ expected: [DiskImage], backingMounts: [String] = [], timeout: TimeInterval = Deadline.quick) throws -> Bool {
+        let r = try runner.run(Tool.hdiutil, ["info", "-plist"], timeout: timeout)
+        try r.requireSuccess("hdiutil")
+        guard let root = VolumeProbe.plist(r.stdout), let rows = root["images"] as? [[String: Any]],
+              rows.allSatisfy({ $0["image-path"] is String && $0["system-entities"] is [[String: Any]] }) else {
+            throw ProbeFailure(M("diskimages.could.not.parse.hdiutil.output"))
+        }
+        let attached = Self.parse(r.stdout, under: "/")
+        let roots = backingMounts + expected.flatMap(\.mountPoints)
+        return !attached.contains { live in
+            roots.contains { Self.contains(live.path, under: $0) } || expected.contains { $0.path == live.path || !Set($0.devEntries).isDisjoint(with: live.devEntries) }
+        }
+    }
+
+    /// The caller retains command diagnostics and verifies the attachment disappeared.
+    func detach(_ image: DiskImage, force: Bool = false) throws -> CommandResult {
+        guard let dev = image.wholeDisk else { throw ProbeFailure(M("ejectforce.image.identity.unknown")) }
+        return try runner.run(Tool.hdiutil, ["detach", dev] + (force ? ["-force"] : []), timeout: Deadline.eject)
     }
 }

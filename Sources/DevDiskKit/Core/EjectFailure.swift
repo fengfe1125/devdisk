@@ -9,18 +9,24 @@ struct EjectFailure: Equatable {
     let blockingPID: Int32?
     let completedApps: Int
     let completedProcesses: Int
-    let completedImages: Int
+    var completedImages: Int
     var commandExitCode: Int32? = nil
     var commandTimedOut = false
     var commandCancelled = false
     var verificationDuration: TimeInterval? = nil
     var verification: EjectVerification? = nil
 
+    var forceUsed = false
+    var allowsForce = false
+    var relatedImages: [DiskImage] = []
+    var pendingImage: DiskImage? = nil
+
     private var stageLabel: String {
         let keys = ["validate": "ejectflow.verify.target.and.scope", "apps": "ejectflow.request.apps.to.quit",
                     "daemons": "ejectflow.stop.approved.background.services", "images": "ejectflow.eject.read.only.disk.images",
                     "recheck": "ejectflow.recheck.open.files", "unmount": "ejectflow.ask.macos.to.eject",
-                    "verify": "ejectflow.verify.eject.result"]
+                    "verify": "ejectflow.verify.eject.result", "force-unmount": "ejectforce.unmount.disk",
+                    "force-images": "ejectforce.detach.images"]
         return keys[stage].map { L($0) } ?? stage
     }
 
@@ -29,6 +35,7 @@ struct EjectFailure: Equatable {
          M("ejectfailure.disk", target.physicalDisk).text, M("ejectfailure.stage", stageLabel).text,
          M("ejectfailure.pid", blockingPID.map(String.init) ?? L("ejectfailure.unknown")).text,
          M("ejectflow.apps.quit.service.processes.stopped.images.ejected.requests", completedApps, completedProcesses, completedImages).text]
+        if forceUsed { lines.append(L("ejectforce.used")) }
         if let commandExitCode {
             lines.append(M("ejectfailure.command.result", commandExitCode,
                            commandTimedOut ? L("ejectfailure.yes") : L("ejectfailure.no"),

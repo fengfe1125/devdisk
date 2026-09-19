@@ -228,7 +228,7 @@ struct PanelView: View {
         switch store.activeScreen {
         case .ejecting:     return store.waitingForSystem ? L("ejectingview.waiting.for.macos.do.not.unplug") : L("panelview.preparing.to.eject")
         case .preview:      return L("panelview.review.the.eject.scope")
-        case .ejected:      return L("panelview.unmounted.safe.to.unplug")
+        case .ejected:      return L(store.forceWasUsed ? "ejectforce.completed" : "panelview.unmounted.safe.to.unplug")
         case .disconnected: return L("panelview.disconnected")
         case .settings:
             return L("panelview.settings")
@@ -291,6 +291,14 @@ struct DisconnectedView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let failure = store.ejectFailure {
+                EjectFailureBanner(message: failure, pending: store.ejectVerificationPending,
+                    onRecheck: { store.reverifyEject() }, onDismiss: { store.dismissEjectFailure() })
+                if store.canOfferForce {
+                    Button(L("ejectforce.action")) { store.requestForceEject() }.buttonStyle(.bordered).padding(10)
+                }
+                if let diagnostic = store.ejectDiagnostic { EjectFailureDetails(failure: diagnostic).padding(UI.hPad) }
+            }
             BlankState(
                 symbol: "externaldrive.badge.xmark",
                 title: L("panelview.is.disconnected", name),
@@ -343,11 +351,12 @@ struct EjectedView: View {
                 symbol: "checkmark.circle",
                 symbolColor: .green,
                 symbolBackground: .green,
-                title: L("panelview.safe.to.unplug"),
+                title: L(store.forceWasUsed ? "ejectforce.completed" : "panelview.safe.to.unplug"),
                 message: AnyView(
                     VStack(spacing: 3) {
                         Text(store.lastEjectVerification
                              ?? M("panelview.physical.disk.offline.related.volumes.unmounted"))
+                        if store.forceWasUsed { Text(L("ejectforce.data.warning")).foregroundStyle(.orange) }
                         if let s = store.lastEjectSummary { Text(s) }
                     }
                 )

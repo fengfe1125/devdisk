@@ -39,7 +39,7 @@
 "ejectflow.verify.target.and.scope" = "确认目标及操作范围";
 "ejectflow.request.apps.to.quit" = "请求应用退出";
 "ejectflow.stop.approved.background.services" = "停止已批准的服务和任务";
-"ejectflow.eject.read.only.disk.images" = "推出只读磁盘映像";
+"ejectflow.eject.read.only.disk.images" = "普通推出关联磁盘映像";
 "ejectflow.recheck.open.files" = "复查占用";
 "ejectflow.ask.macos.to.eject" = "系统弹出";
 "ejectflow.verify.eject.result" = "核验弹出结果";
@@ -81,7 +81,7 @@
 "components.eject.pending.confirmation" = "弹出结果待确认";
 "components.recheck.eject.result" = "重新核验";
 "diskstore.target.reconnected.after.pending.eject" = "磁盘已重新连接；上一次弹出结果不再适用于当前连接。";
-"panelview.previous.pending.eject.details" = "上一次待确认详情";
+"panelview.previous.pending.eject.details" = "此前操作详情";
 "ejectflow.macos.refused.to.eject.the.disk" = "系统拒绝弹出";
 "ejectflow.it.is.not.confirmed.safe.to.unplug" = "{0}；未确认可拔线。";
 "ejectflow.is.still.running.handle.any.save.dialog.or" = "{0} 仍在运行；请处理保存对话框或手动停止后重试";
@@ -332,3 +332,27 @@
 "ejectfailure.stage" = "失败步骤：{0}";
 "ejectfailure.pid" = "阻塞进程 PID：{0}";
 "ejectfailure.unknown" = "未知";
+
+// Normal and explicitly confirmed force eject
+"ejectforce.image.identity.unknown" = "无法核实关联映像的设备身份，请重新检测。";
+"ejectforce.target.changed" = "磁盘身份或影响范围发生变化，请重新检测并确认。";
+"ejectforce.not.allowed" = "请先尝试正常弹出，再确认本次强制操作。";
+"ejectforce.used" = "本次已执行过强制操作";
+"ejectforce.detach.images" = "强制推出关联映像";
+"ejectforce.unmount.disk" = "强制卸载磁盘卷";
+"ejectforce.unmount.failed" = "强制卸载失败，磁盘仍未确认弹出。";
+"ejectforce.images.still.attached" = "关联映像仍连接着，尚未确认可以拔线。";
+"ejectforce.already.unmounted" = "关联卷已经卸载";
+"ejectforce.rechecked" = "已重新核对当前状态；继续操作前请确认。";
+"ejectforce.confirm.title" = "确认强制弹出";
+"ejectforce.risk" = "可能丢失未保存的数据或损坏磁盘映像。";
+"ejectforce.no.process.kill" = "将先强制推出下列映像，再卸载磁盘卷并弹出；不会强杀应用或系统服务。";
+"ejectforce.confirm" = "确认强制弹出";
+"ejectforce.action" = "强制弹出…";
+"ejectforce.completed" = "已强制弹出";
+"ejectforce.data.warning" = "关联映像已断开，磁盘卷已卸载；无法保证此前未保存的数据完整。";
+"ejectforce.executing" = "正在强制弹出";
+"ejectimage.unknown" = "读写属性未知";
+"ejectimage.writable" = "可写";
+"ejectimage.readonly" = "只读";
+"ejectimage.unmounted.attached" = "未挂载，但仍连接着";

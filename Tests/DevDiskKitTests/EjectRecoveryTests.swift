@@ -11,11 +11,11 @@ final class EjectRecoveryTests: XCTestCase {
         var plan = try flow.prepare()
         XCTAssertTrue(plan.selectedTasks.isEmpty)
         XCTAssertFalse(plan.canPrepare)
-        guard case .preview = flow.execute(plan, systemOnly: false) else { return XCTFail("must confirm") }
+        guard case .preview = flow.execute(plan, mode: .prepared) else { return XCTFail("must confirm") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
         plan.selectedTasks.insert(try XCTUnwrap(plan.manual.first?.identity))
         XCTAssertTrue(plan.canPrepare)
-        guard case .ejected(_, _, let stopped) = flow.execute(plan, systemOnly: false) else { return XCTFail("must eject") }
+        guard case .ejected(_, _, let stopped, _) = flow.execute(plan, mode: .prepared) else { return XCTFail("must eject") }
         XCTAssertEqual(stopped, 1)
         XCTAssertTrue(h.calls.contains("kill -TERM 123"))
     }
@@ -23,7 +23,7 @@ final class EjectRecoveryTests: XCTestCase {
     func testUnselectedTaskPreventsPartialCleanup() throws {
         let h = FlowHarness(); h.add(executable: "/bin/zsh", args: "zsh"); h.add(pid: 456)
         let f = h.flow, plan = try f.prepare()
-        guard case .preview = f.execute(plan, systemOnly: false) else { return XCTFail("needs selection") }
+        guard case .preview = f.execute(plan, mode: .prepared) else { return XCTFail("needs selection") }
         XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
     }
 
@@ -36,7 +36,7 @@ final class EjectRecoveryTests: XCTestCase {
             XCTAssertTrue(plan.manual.isEmpty)
             XCTAssertTrue(plan.holders.contains { $0.identity?.pid == pid && $0.kind == .system })
             plan.selectedTasks = Set(plan.holders.compactMap(\.identity))
-            _ = f.execute(plan, systemOnly: false)
+            _ = f.execute(plan, mode: .prepared)
             XCTAssertFalse(h.calls.contains { $0.hasPrefix("kill") })
             XCTAssertTrue(h.processes.quits.isEmpty)
         }
@@ -46,7 +46,7 @@ final class EjectRecoveryTests: XCTestCase {
         let h = FlowHarness(); h.add(app: "review.editor"); h.processes.refuseQuit = true
         h.processes.onQuit = { h.files[123] = [] }
         let f = h.flow, plan = try f.prepare()
-        guard case .ejected(_, let apps, _) = f.execute(plan, systemOnly: false) else { return XCTFail("released") }
+        guard case .ejected(_, let apps, _, _) = f.execute(plan, mode: .prepared) else { return XCTFail("released") }
         XCTAssertEqual(apps, 0, "Do not claim an app quit just because its handles closed")
         XCTAssertNotNil(h.processes.live[123])
     }
@@ -54,16 +54,16 @@ final class EjectRecoveryTests: XCTestCase {
     func testSaveDialogContinuesWithoutRepeatingQuitAndCountsLaterExit() throws {
         let h = FlowHarness(); h.add(app: "review.editor"); h.processes.refuseQuit = true
         let f = h.flow, plan = try f.prepare()
-        guard case .preview(let pending) = f.execute(plan, systemOnly: false) else { return XCTFail("wait for save") }
+        guard case .preview(let pending) = f.execute(plan, mode: .prepared) else { return XCTFail("wait for save") }
         XCTAssertTrue(pending.needsContinuation)
         XCTAssertNotNil(pending.notice)
         XCTAssertEqual(pending.failure?.stage, "apps")
         XCTAssertEqual(pending.failure?.blockingPID, 123)
         XCTAssertEqual(h.processes.quits, [123])
-        guard case .preview(let stillPending) = h.flow.execute(pending, systemOnly: false) else { return XCTFail("still waiting") }
+        guard case .preview(let stillPending) = h.flow.execute(pending, mode: .prepared) else { return XCTFail("still waiting") }
         XCTAssertEqual(h.processes.quits, [123])
         h.processes.live.removeValue(forKey: 123)
-        guard case .ejected(_, let apps, _) = h.flow.execute(stillPending, systemOnly: false) else { return XCTFail("continue") }
+        guard case .ejected(_, let apps, _, _) = h.flow.execute(stillPending, mode: .prepared) else { return XCTFail("continue") }
         XCTAssertEqual(apps, 1)
         XCTAssertEqual(h.processes.quits, [123])
     }
@@ -72,7 +72,7 @@ final class EjectRecoveryTests: XCTestCase {
         let h = FlowHarness(); h.add(executable: "/usr/bin/tail", args: "tail"); h.stopWorks = false
         let f = h.flow
         var plan = try f.prepare(); plan.selectedTasks = plan.processScope
-        guard case .preview(let waiting) = f.execute(plan, systemOnly: false) else { return XCTFail("pending TERM") }
+        guard case .preview(let waiting) = f.execute(plan, mode: .prepared) else { return XCTFail("pending TERM") }
         let sent = h.calls.filter { $0.hasPrefix("kill") }
         guard case .preview(let refreshed) = h.flow.recheck(waiting) else { return XCTFail("refresh") }
         XCTAssertEqual(refreshed.selectedTasks, waiting.selectedTasks)
@@ -85,7 +85,7 @@ final class EjectRecoveryTests: XCTestCase {
         let h = FlowHarness(); h.add(app: "review.editor"); h.processes.refuseQuit = true
         let f = h.flow, plan = try f.prepare()
         f.sleep = { h.clock += $0; h.cancellation.cancel() }
-        guard case .aborted = f.execute(plan, systemOnly: false) else { return XCTFail("cancelled") }
+        guard case .aborted = f.execute(plan, mode: .prepared) else { return XCTFail("cancelled") }
         XCTAssertFalse(h.calls.contains(eject))
     }
 
@@ -176,7 +176,7 @@ final class EjectRecoveryTests: XCTestCase {
         XCTAssertFalse(h.cancellation.isCommitted)
         h.onCall = nil; h.failures.removeValue(forKey: eject)
         var approved = plan; approved.selectedTasks = plan.processScope
-        guard case .ejected = h.flow.execute(approved, systemOnly: false) else { return XCTFail("recovered") }
+        guard case .ejected = h.flow.execute(approved, mode: .prepared) else { return XCTFail("recovered") }
     }
 
     func testPIDAloneNeverAllowsTermination() {

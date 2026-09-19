@@ -8,10 +8,10 @@ A version number in this repository doesn't mean that version has been released.
 
 ## Before ejecting: a read-only check
 
-Clicking **Safe Eject** first runs a read-only check. If nothing needs handling, DevDisk simply tries a normal system eject. If it needs to quit apps, stop specific background services, or detach read-only disk images, it shows you the impact first and waits for you to confirm.
+Clicking **Safe Eject** first runs a read-only check. If nothing needs handling, DevDisk simply tries a normal system eject. If it needs to quit apps, stop specific background services, or normally detach related disk images, it shows you the impact first and waits for you to confirm.
 
 - A matching process name or command line only counts as "possibly related". That's never enough to quit an app.
-- Acting on a process requires evidence that it holds files on the target volume, plus a check of its PID, user, start time, and executable.
+- Acting on a process requires evidence that it holds files on the target volume or a related image volume, plus a check of its PID, user, start time, and executable.
 - Timeouts, failures, and incomplete checks are shown as such. An unknown result is never shown as normal or as "nobody is using it".
 - Switching drives, re-checking, or a change in what's mounted invalidates the old task; old results can't overwrite a new drive.
 - **Stop** halts the remaining steps. Quit or stop requests that were already sent can't be undone.
@@ -25,13 +25,14 @@ Clicking **Safe Eject** first runs a read-only check. If nothing needs handling,
 | Something it can handle | Shows the target drive, what it will act on, the file evidence, and the impact; acts after you confirm |
 | Incomplete check | Re-check, cancel, or explicitly choose "Only try a system eject" |
 | Current-user terminal tasks and unknown background tasks with verified identities | Offers unchecked termination choices, with a warning that work may be interrupted |
-| Unverifiable processes, writable or unknown disk images | Asks you to deal with them first, then re-check |
-| Several mounted volumes on the same physical drive | Lists the related volumes; only allows a normal system eject after explicit confirmation, without closing any processes |
+| Unverifiable processes | Leaves processes alone; normal system eject remains available |
+| Writable, read-only or unknown-access images | Normal detach after confirmation, including attached but unmounted images |
+| Several mounted volumes on the same physical drive | Lists related volumes; ordinary eject does not close processes. After a normal refusal, force requires a separate confirmation |
 | The target changed, isn't an external physical drive, or its layout can't be confirmed | Stops and hands it back to you |
 
 "Only try a system eject" doesn't quit apps, stop services, or detach images, and never uses force. When a check is incomplete, DevDisk doesn't claim nobody is using the drive.
 
-After you confirm, the order is: confirm the target and scope → ask GUI apps to quit → stop the specific services → detach read-only images → re-check → system eject → verify the drive is offline.
+After you confirm, the order is: confirm the target and scope → ask GUI apps to quit → stop the specific services → normally detach related images → re-check → system eject → verify images are detached and related volumes are unmounted. Fixed external devices can remain in the system disk list.
 
 ### What DevDisk may handle for you
 
@@ -39,11 +40,19 @@ After you confirm, the order is: confirm the target and scope → ask GUI apps t
 - **Specific services**: the current user's Gradle daemon, Kotlin daemon, and adb server receive SIGTERM only when there's real file-holding evidence and you've confirmed. Sending the signal does not mean it exited: DevDisk checks whether the process exited or released its handles. Only observed exits count as stopped processes.
 - **Other tasks**: verified current-user terminal tasks, foreground builds, and unknown background processes may receive SIGTERM only after you explicitly select them and confirm. Choices start unchecked. This can interrupt work or lose unsaved progress; unverified identities remain manual.
 - **System and other users' processes**: never touched. Inferred entries are shown separately from what the scan actually found.
-- **Disk images**: read-only images are detached normally after you confirm; writable images, or images whose read/write mode is unknown, are never detached automatically.
+- **Disk images**: all three access states are shown separately and support normal detach after confirmation. Scans include image volumes; nested images detach before their backing images. Attachment removal is verified after the command returns.
 
 A preview older than 30 seconds, or a change in the target's mount state, needs a new check. Confirming doesn't cover anything new: if new holders or images show up, DevDisk returns an updated preview and keeps the count of what it has already done.
 
 A refused system eject retains its raw error, stage, blocking PID, and completed actions locally for viewing or copying. A new user-process blocker needs fresh file evidence and confirmation. Only explicit temporary-busy errors permit up to three attempts; new occupants, permissions errors, timeouts, and unknown results stop automatic retry. Refreshing does not erase the failure.
+
+### Force eject after an ordinary failure
+
+After a definite normal detach or disk-eject refusal, **Force eject…** performs a fresh read-only check and lists every affected volume and image. The user must confirm the risk of lost unsaved data or damaged images. Confirmation applies only to this operation; an expired confirmation or expanded scope requires another review.
+
+The sequence is force detach dependent images, verify they are detached, `diskutil unmountDisk force`, then ordinary `diskutil eject`. It never force-kills apps or system services and never elevates privileges. After unmount, the original UUIDs, device identifiers and physical-store mapping are checked without relying on vanished mount paths. Completed detach and unmount steps are not repeated.
+
+Timeouts and unknown outcomes remain pending until a read-only recheck; commands are not automatically repeated or escalated. Successful forced operations are labelled as such and retain an unsaved-data warning. Permission or device errors can still prevent ejection.
 
 ## What DevDisk can and can't detect
 

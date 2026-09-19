@@ -40,7 +40,7 @@ public enum Snapshot {
                 print("\(holder.name) · \(holder.openFileCount ?? 0) 个文件 · \(holder.kind)")
                 holder.sampleFiles.forEach { print("  " + $0) }
             }
-            plan.images.forEach { print("映像：\($0.path) · \($0.writable ? "需手动处理" : "只读")") }
+            plan.images.forEach { print("映像：\($0.path) · \(!$0.accessKnown ? "属性未知" : $0.writable ? "可写" : "只读")") }
             plan.issues.forEach { print(("检测不完整：" + $0).text) }
             if let notice = plan.notice { print(notice.text) }
             if let failure = plan.failure { print(failure.report) }
@@ -55,22 +55,22 @@ public enum Snapshot {
                 plan.selectedTasks = Set(selectable.compactMap(\.identity).filter { pids.contains($0.pid) })
                 guard plan.canPrepare else { return false }
             }
-            if plan.canSystemOnly {
+            if !plan.canPrepare {
                 print("输入 system 仅尝试普通系统弹出；其他输入取消：")
                 guard readLine() == "system" else { return false }
-                outcome = flow.execute(plan, systemOnly: true)
+                outcome = flow.execute(plan, mode: .systemOnly)
             } else if plan.canPrepare {
                 print("退出应用影响整个应用，后台服务可能仍在工作。输入 yes 确认处理并弹出；其他输入取消：")
                 guard readLine() == "yes" else { return false }
-                outcome = flow.execute(plan, systemOnly: false)
+                outcome = flow.execute(plan, mode: .prepared)
             } else {
                 print("请手动处理上述阻塞对象后重新运行。")
                 return false
             }
         }
         switch outcome {
-        case .ejected(let t, let apps, let daemons):
-            print("成功 · \(String(format: "%.1f", t)) 秒 · 应用 \(apps) · 服务进程 \(daemons)")
+        case .ejected(let t, let apps, let daemons, let forced):
+            print("\(forced ? "已强制弹出" : "成功") · \(String(format: "%.1f", t)) 秒 · 应用 \(apps) · 服务进程 \(daemons)")
             return true
         case .aborted(let why): print("中止：\(why.text)"); return false
         case .preview: return false

@@ -46,14 +46,20 @@ final class FlowHarness: CommandRunner, @unchecked Sendable {
             return output("1 root /sbin/launchd\n" + processes.live.keys.sorted().map { "\($0) example \(args[$0] ?? "process")" }.joined(separator: "\n"))
         }
         if path == Tool.lsof {
-            let rows = files.keys.sorted().filter { processes.live[$0] != nil && !(files[$0] ?? []).isEmpty }
+            let mount = arguments.last ?? Self.mount
+            let selected = files.mapValues { $0.filter { $0 == mount || $0.hasPrefix(mount + "/") } }
+            let rows = selected.keys.sorted().filter { processes.live[$0] != nil && !(selected[$0] ?? []).isEmpty }
             return output(rows.map { pid in
-                "p\(pid)\ncprocess\nLexample\n" + (files[pid] ?? []).map { "f3\nn" + $0 + "\n" }.joined()
+                "p\(pid)\ncprocess\nLexample\n" + (selected[pid] ?? []).map { "f3\nn" + $0 + "\n" }.joined()
             }.joined(), code: rows.isEmpty ? 1 : 0)
         }
         if path == Tool.hdiutil && arguments == ["info", "-plist"] {
             let rows: [[String: Any]] = images.map { image in
-                var row: [String: Any] = ["image-path": image.path, "system-entities": image.devEntries.map { ["dev-entry": $0] }]
+                var row: [String: Any] = ["image-path": image.path, "system-entities": image.devEntries.enumerated().map { index, device -> [String: String] in
+                    var entity = ["dev-entry": device]
+                    if index < image.mountPoints.count { entity["mount-point"] = image.mountPoints[index] }
+                    return entity
+                }]
                 if image.accessKnown { row["writeable"] = image.writable }
                 return row
             }
@@ -61,8 +67,18 @@ final class FlowHarness: CommandRunner, @unchecked Sendable {
         }
         if path == Tool.hdiutil && arguments.first == "detach" {
             if !detachWorks { return output("busy", code: 1) }
-            images.removeAll { $0.wholeDisk == arguments.last }
+            images.removeAll { $0.wholeDisk == arguments[1] }
             return output("detached")
+        }
+        if path == Tool.diskutil && arguments.prefix(2) == ["info", "-plist"],
+           let device = arguments.last, let image = images.first(where: { $0.devEntries.contains(device) }) {
+            var info: [String: Any] = ["DeviceIdentifier": String(device.dropFirst(5))]
+            if let uuid = image.volumeUUIDs[device] { info["VolumeUUID"] = uuid }
+            return .init(stdout: try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0), stderr: "", exitCode: 0)
+        }
+        if path == Tool.diskutil && arguments == ["unmountDisk", "force", "disk90"] {
+            targetInspector.unmounted = true
+            return output("unmounted")
         }
         if path == Tool.kill {
             if stopWorks, let pid = Int32(arguments.last ?? "") { processes.live.removeValue(forKey: pid) }
@@ -98,6 +114,7 @@ final class FakeTargetInspector: TargetInspecting {
     var current = EjectTarget(volume: .init(name: "ReviewDisk", mount: FlowHarness.mount, device: "disk90s1", uuid: "review-uuid"),
                              physicalDisk: "disk90", affected: [.init(name: "ReviewDisk", mount: FlowHarness.mount, device: "disk90s1", uuid: "review-uuid")])
     var gone = false
+    var unmounted = false
     var ejectedResults: [Bool] = []
     var verificationResults: [EjectVerification] = []
     var verifyError = false
@@ -107,6 +124,12 @@ final class FakeTargetInspector: TargetInspecting {
     func target(at mount: String, runner: CommandRunner) throws -> EjectTarget {
         reads += 1; beforeRead?()
         return current
+    }
+    func validateUnmounted(_ target: EjectTarget, runner: CommandRunner) throws {
+        reads += 1; beforeRead?()
+        guard current == target, current.affected.allSatisfy({ !$0.uuid.isEmpty }) else {
+            throw ProbeFailure("target changed")
+        }
     }
     func ejectVerification(_ target: EjectTarget, runner: CommandRunner,
                            timeout: TimeInterval) -> EjectVerification {
@@ -125,9 +148,9 @@ final class FakeTargetInspector: TargetInspecting {
             if ejectedResults.isEmpty { gone = next }
             result = next
         } else { result = gone }
-        return .init(state: result ? .offline : .present,
+        return .init(state: result ? .offline : unmounted ? .unmounted : .present,
                      physicalDiskPresent: !result,
-                     mountedVolumes: result ? [] : target.affected,
+                     mountedVolumes: result || unmounted ? [] : target.affected,
                      relatedMountsKnown: true, issue: nil)
     }
 }

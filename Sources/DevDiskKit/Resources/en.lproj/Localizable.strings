@@ -39,7 +39,7 @@
 "ejectflow.verify.target.and.scope" = "Verify target and scope";
 "ejectflow.request.apps.to.quit" = "Request apps to quit";
 "ejectflow.stop.approved.background.services" = "Stop approved services and tasks";
-"ejectflow.eject.read.only.disk.images" = "Eject read-only disk images";
+"ejectflow.eject.read.only.disk.images" = "Normally detach related disk images";
 "ejectflow.recheck.open.files" = "Recheck open files";
 "ejectflow.ask.macos.to.eject" = "Ask macOS to eject";
 "ejectflow.verify.eject.result" = "Verify eject result";
@@ -332,3 +332,27 @@
 "ejectfailure.stage" = "Stage: {0}";
 "ejectfailure.pid" = "Blocking PID: {0}";
 "ejectfailure.unknown" = "unknown";
+
+// Normal and explicitly confirmed force eject
+"ejectforce.image.identity.unknown" = "Cannot verify the related image devices. Scan again.";
+"ejectforce.target.changed" = "The disk identity or affected scope changed. Scan and confirm again.";
+"ejectforce.not.allowed" = "Try normal eject first, then confirm this force operation.";
+"ejectforce.used" = "Force was used during this operation";
+"ejectforce.detach.images" = "Force detach related images";
+"ejectforce.unmount.disk" = "Force unmount disk volumes";
+"ejectforce.unmount.failed" = "Force unmount failed. Disk ejection is not confirmed.";
+"ejectforce.images.still.attached" = "Related images remain attached. Removal is not confirmed.";
+"ejectforce.already.unmounted" = "Related volumes are already unmounted";
+"ejectforce.rechecked" = "Current state checked again. Confirm before continuing.";
+"ejectforce.confirm.title" = "Review force eject";
+"ejectforce.risk" = "Unsaved data may be lost or disk images may be damaged.";
+"ejectforce.no.process.kill" = "Force detaches the listed images, then unmounts and ejects the disk. Apps and system services are not force-killed.";
+"ejectforce.confirm" = "Confirm force eject";
+"ejectforce.action" = "Force eject…";
+"ejectforce.completed" = "Force eject completed";
+"ejectforce.data.warning" = "Related images are detached and disk volumes are unmounted. Previously unsaved data may not be intact.";
+"ejectforce.executing" = "Force ejecting";
+"ejectimage.unknown" = "Access mode unknown";
+"ejectimage.writable" = "Writable";
+"ejectimage.readonly" = "Read-only";
+"ejectimage.unmounted.attached" = "Not mounted, but still attached";

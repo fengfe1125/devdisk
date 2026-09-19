@@ -14,7 +14,7 @@ struct EjectingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PanelSection(title: store.operation == .preflight ? L("ejectingview.running.read.only.preflight") : store.operation == .cancelling ? L("ejectingview.cancelling") : L("ejectingview.ejecting.safely"),
+            PanelSection(title: store.operation == .preflight ? L("ejectingview.running.read.only.preflight") : store.operation == .cancelling ? L("ejectingview.cancelling") : L(store.ejectPlan?.forceConfirmation == true ? "ejectforce.executing" : "ejectingview.ejecting.safely"),
                     aside: "\(doneCount) / \(store.ejectSteps.count)") {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(store.ejectSteps) { StepRow(step: $0) }

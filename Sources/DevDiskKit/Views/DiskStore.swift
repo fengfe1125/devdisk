@@ -30,6 +30,7 @@ final class DiskStore: ObservableObject {
     @Published var lastEjectVerification: Message?
     @Published var ejectPlan: EjectPlan?
     @Published var waitingForSystem = false
+    @Published var forceWasUsed = false
     @Published private var verifiedEjected: Screen?
     @Published var mountPoint = ""
     @Published var drives: [DiscoveredVolume] = []
@@ -71,6 +72,11 @@ final class DiskStore: ObservableObject {
             defaults.removeObject(forKey: "targetVolumeUUID")
             defaults.set(newValue, forKey: "targetMountPoint")
         }
+    }
+    var canOfferForce: Bool {
+        !ejectVerificationPending && (!operation.locksTarget || operation == .awaitingConfirmation)
+            && (ejectPlan?.failure ?? ejectDiagnostic)?.allowsForce == true
+            && (ejectPlan?.failure ?? ejectDiagnostic)?.target.volume.mount == mountPoint
     }
     var isMounted: Bool { mounted }
     var canCancel: Bool { operation.locksTarget && !waitingForSystem && operationToken?.isCommitted != true }
@@ -141,7 +147,7 @@ final class DiskStore: ObservableObject {
                     screen = .connected
                     ejectFailure = M("diskstore.mount.state.changed.the.preview.is.no.longer")
                     refresh()
-                } else { cancelEject() }
+                } else if ejectPlan?.forceConfirmation != true { cancelEject() }
             }
             return
         }
@@ -192,6 +198,12 @@ final class DiskStore: ObservableObject {
     func applyDiscovery(_ found: [DiscoveredVolume]) {
         drives = found
         guard !operation.locksTarget else { return }
+        if let failure = ejectDiagnostic, failure.forceUsed,
+           !found.contains(where: { $0.volumeUUID == failure.target.volume.uuid }) {
+            mounted = false; snapshot = nil; selectedIdentity = nil
+            screen = .disconnected
+            return
+        }
         let pinnedUUID = defaults.string(forKey: "targetVolumeUUID")
         let chosen: DiscoveredVolume?
         if let pinnedUUID, !pinnedUUID.isEmpty {
@@ -343,7 +355,7 @@ final class DiskStore: ObservableObject {
     }
 
     func eject() {
-        guard mounted, !operation.locksTarget else { return }
+        guard mounted, !operation.locksTarget, !ejectVerificationPending else { return }
         beginPreflight()
     }
     func retryPreflight() {
@@ -358,12 +370,21 @@ final class DiskStore: ObservableObject {
         else { ejectPlan?.selectedTasks.remove(identity) }
     }
     private func beginPreflight(previous: EjectPlan? = nil) {
+        if previous == nil, let failure = ejectDiagnostic, failure.forceUsed,
+           failure.target.volume.mount == mountPoint {
+            let recovery = EjectPlan(target: failure.target, createdAt: now(), holders: [],
+                images: failure.relatedImages, issues: [], forceUsed: true,
+                completedApps: failure.completedApps, completedDaemons: failure.completedProcesses,
+                completedImages: failure.completedImages, failure: failure)
+            beginPreflight(previous: recovery)
+            return
+        }
         invalidateScans()
         operation = .preflight; screen = .ejecting
         ejectPlan = nil; ejectFailure = nil; lastError = nil; waitingForSystem = false
         ejectVerificationPending = false
         lastEjectVerification = nil
-        if previous == nil { ejectDiagnostic = nil }
+        if previous == nil { ejectDiagnostic = nil; forceWasUsed = false }
         ejectSteps = [.init(id: "scan", title: M("diskstore.read.only.preflight.verify.target.and.open.files"), state: .running)]
         let token = CancellationToken()
         operationToken = token
@@ -407,6 +428,7 @@ final class DiskStore: ObservableObject {
             Task { @MainActor in
                 guard let self, self.operationToken === token else { return }
                 self.ejectDiagnostic = failure
+                self.forceWasUsed = failure.forceUsed
             }
         }
         flow.onVerifiedEject = { [weak self] detail in
@@ -416,17 +438,35 @@ final class DiskStore: ObservableObject {
             }
         }
     }
-    func confirmEject(systemOnly: Bool = false) {
+    func confirmEject(mode: EjectMode = .prepared) {
         guard operation == .awaitingConfirmation, let plan = ejectPlan,
               let token = operationToken, !token.isCancelled else { return }
+        guard mode != .force || (plan.forceConfirmation && plan.canForce) else { return }
+        guard !plan.forceConfirmation || mode == .force else { return }
         operation = .executing; screen = .ejecting
         let flow = makeFlow(runner, mountPoint, token)
         wire(flow, token: token)
         ejectQueue.async { [weak self] in
-            let outcome = flow.execute(plan, systemOnly: systemOnly)
+            let outcome = flow.execute(plan, mode: mode)
             Task { @MainActor in self?.receive(outcome, token: token) }
         }
     }
+    func requestForceEject() {
+        guard canOfferForce, let failure = ejectPlan?.failure ?? ejectDiagnostic else { return }
+        operationToken?.cancel()
+        invalidateScans()
+        let token = CancellationToken()
+        operationToken = token
+        ejectPlan = nil; waitingForSystem = false
+        operation = .preflight; screen = .ejecting
+        let flow = makeFlow(runner, failure.target.volume.mount, token)
+        wire(flow, token: token)
+        ejectQueue.async { [weak self] in
+            let outcome = flow.prepareForce(failure)
+            Task { @MainActor in self?.receive(outcome, token: token) }
+        }
+    }
+
     func reverifyEject() {
         guard !operation.locksTarget, let previous = ejectDiagnostic,
               ejectVerificationPending else { return }
@@ -464,10 +504,13 @@ final class DiskStore: ObservableObject {
         }
         switch outcome {
         case .preview(let plan):
+            ejectVerificationPending = false
+            forceWasUsed = plan.forceUsed
             ejectPlan = plan; operation = .awaitingConfirmation; screen = .preview
             if let failure = plan.failure { ejectDiagnostic = failure }
             waitingForSystem = false
-        case .ejected(let duration, let apps, let daemons):
+        case .ejected(let duration, let apps, let daemons, let forced):
+            forceWasUsed = forced
             operation = .finished; screen = .ejected(duration, apps: apps, daemons: daemons)
             waitingForSystem = false
             ejectVerificationPending = false
@@ -483,6 +526,7 @@ final class DiskStore: ObservableObject {
         case .verificationPending(let failure, let why):
             operation = .finished; screen = .connected; waitingForSystem = false
             ejectVerificationPending = true
+            forceWasUsed = failure.forceUsed
             ejectDiagnostic = failure; ejectFailure = why; ejectPlan = nil
         }
     }
