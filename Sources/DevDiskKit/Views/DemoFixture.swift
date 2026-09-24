@@ -2,23 +2,32 @@ import AppKit
 
 /// Explicit, isolated UI acceptance mode. Every process/disk operation is simulated;
 /// this runner never forwards an unrecognised command to the system.
-final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @unchecked Sendable {
+final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, SimulatorInspecting, @unchecked Sendable {
     let scenario: String
     let mount = "/Volumes/DevDisk 演示盘"
     private var live: [Int32: ProcessIdentity] = [:]
     private(set) var gone = false
     private var unmounted = false
     private var imageDetached = false
+    private var simulators: [SimulatorDevice] = []
     init(scenario: String) {
         self.scenario = scenario
-        for index in 1...(scenario.contains("long") ? 8 : 1) {
-            let pid = Int32(90000 + index)
-            live[pid] = .init(pid: pid, uid: getuid(), startedSeconds: 42, startedMicros: 0,
-                             executable: "/Applications/演示编辑器.app/Contents/MacOS/editor",
-                             bundleID: "devdisk.demo.editor\(index)", appName: "演示编辑器 \(index)")
+        if !scenario.contains("simulators") {
+            for index in 1...(scenario.contains("long") ? 8 : 1) {
+                let pid = Int32(90000 + index)
+                live[pid] = .init(pid: pid, uid: getuid(), startedSeconds: 42, startedMicros: 0,
+                                 executable: "/Applications/演示编辑器.app/Contents/MacOS/editor",
+                                 bundleID: "devdisk.demo.editor\(index)", appName: "演示编辑器 \(index)")
+            }
         }
         if scenario.contains("tasks") {
             live[90100] = .init(pid: 90100, uid: getuid(), startedSeconds: 42, startedMicros: 0, executable: "/bin/zsh")
+        }
+        if scenario.contains("simulators") {
+            simulators = [.init(udid: "DEMO-SIM-001", name: "iPhone 演示设备",
+                                runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-演示版",
+                                state: "Booted", dataPath: mount + "/Applications/CoreSimulatorData/Devices/DEMO-SIM-001/data",
+                                runtimePath: mount + "/Applications/Xcode.app/Runtime.simruntime")]
         }
     }
     var targetValue: EjectTarget {
@@ -40,6 +49,15 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
               ], directories: [], occupancy: nil)
     }
     func identity(_ pid: Int32) throws -> ProcessIdentity? { live[pid] }
+    func devices(runner: CommandRunner) throws -> [SimulatorDevice] { simulators }
+    func shutdown(_ device: SimulatorDevice, runner: CommandRunner) throws {
+        guard let index = simulators.firstIndex(where: { $0.udid == device.udid }) else {
+            throw ProbeFailure("demo simulator disappeared")
+        }
+        simulators[index] = .init(udid: device.udid, name: device.name,
+                                  runtimeIdentifier: device.runtimeIdentifier, state: "Shutdown",
+                                  dataPath: device.dataPath, runtimePath: device.runtimePath)
+    }
     func requestQuit(_ identity: ProcessIdentity) throws {
         if !scenario.contains("running") && !scenario.contains("save") { live.removeValue(forKey: identity.pid) }
     }
@@ -62,6 +80,7 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, @un
         case Tool.lsof:
             if args.last != mount { return result("", code: 1) }
             if scenario.contains("unknown") { return .init(stdout: Data(), stderr: "演示：检测超时，结果不完整", exitCode: -1, timedOut: true) }
+            if scenario.contains("simulators"), live.isEmpty { return result("") }
             return result(live.keys.sorted().map { "p\($0)\nceditor\nLdemo\nf3\nn\(mount)/Projects/Example-\($0)/Sources/document.swift\n" }.joined(), code: live.isEmpty ? 1 : 0)
         case Tool.hdiutil:
             if args.first == "detach", scenario.contains("image") {
@@ -107,6 +126,7 @@ enum DemoFixture {
         store.makeFlow = { _, mount, token in
             let flow = EjectFlow(runner: machine, mountPoint: mount, cancellation: token)
             flow.targets = machine; flow.inspector = machine
+            flow.simulatorInspector = machine
             if scenario.contains("image") { flow.verificationTimeout = 0.5 }
             if scenario.contains("save") { flow.quitTimeout = 1 }
             return flow

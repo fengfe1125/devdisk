@@ -40,6 +40,9 @@ public enum Snapshot {
                 print("\(holder.name) · \(holder.openFileCount ?? 0) 个文件 · \(holder.kind)")
                 holder.sampleFiles.forEach { print("  " + $0) }
             }
+            for device in plan.simulators {
+                print("模拟器：\(device.name) · \(device.displayRuntime) · \(device.state) · \(device.udid)")
+            }
             plan.images.forEach { print("映像：\($0.path) · \(!$0.accessKnown ? "属性未知" : $0.writable ? "可写" : "只读")") }
             plan.issues.forEach { print(("检测不完整：" + $0).text) }
             if let notice = plan.notice { print(notice.text) }
@@ -55,12 +58,12 @@ public enum Snapshot {
                 plan.selectedTasks = Set(selectable.compactMap(\.identity).filter { pids.contains($0.pid) })
                 guard plan.canPrepare else { return false }
             }
-            if !plan.canPrepare {
+            if !plan.canPrepare && plan.canSystemOnly {
                 print("输入 system 仅尝试普通系统弹出；其他输入取消：")
                 guard readLine() == "system" else { return false }
                 outcome = flow.execute(plan, mode: .systemOnly)
             } else if plan.canPrepare {
-                print("退出应用影响整个应用，后台服务可能仍在工作。输入 yes 确认处理并弹出；其他输入取消：")
+                print("确认后将正常关闭上述模拟器、请求应用退出、处理后台服务及关联映像。输入 yes 继续；其他输入取消：")
                 guard readLine() == "yes" else { return false }
                 outcome = flow.execute(plan, mode: .prepared)
             } else {
@@ -256,13 +259,22 @@ public enum Snapshot {
         do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
         catch { print(error.localizedDescription); return false }
         let checker = UpdateChecker(fetcher: StubFetcher(), defaults: previewDefaults())
-        for scenario in ["short", "long", "unknown", "running", "waiting"] {
+        for scenario in ["short", "long", "unknown", "running", "waiting", "simulators"] {
             let store = DemoFixture.makeStore(scenario: scenario)
             for _ in 0..<300 {
                 if store.operation == .awaitingConfirmation { break }
                 try? await Task.sleep(nanoseconds: 10_000_000)
             }
             guard store.ejectPlan != nil else { print("演示预检未完成：" + scenario); return false }
+            if scenario == "simulators" {
+                for identity in store.ejectPlan?.manual.compactMap(\.identity) ?? [] {
+                    store.selectTask(identity, selected: true)
+                }
+                guard let plan = store.ejectPlan, plan.simulators.count == 1, plan.canPrepare else {
+                    print("模拟器预览未包含可确认的正常关机流程")
+                    return false
+                }
+            }
             if scenario == "running" || scenario == "waiting" {
                 store.confirmEject()
                 for _ in 0..<300 {

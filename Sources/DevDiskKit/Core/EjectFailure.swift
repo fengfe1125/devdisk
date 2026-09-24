@@ -23,6 +23,7 @@ struct EjectFailure: Equatable {
 
     private var stageLabel: String {
         let keys = ["validate": "ejectflow.verify.target.and.scope", "apps": "ejectflow.request.apps.to.quit",
+                    "simulators": "ejectflow.shutdown.related.simulators",
                     "daemons": "ejectflow.stop.approved.background.services", "images": "ejectflow.eject.read.only.disk.images",
                     "recheck": "ejectflow.recheck.open.files", "unmount": "ejectflow.ask.macos.to.eject",
                     "verify": "ejectflow.verify.eject.result", "force-unmount": "ejectforce.unmount.disk",

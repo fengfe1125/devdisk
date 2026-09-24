@@ -105,12 +105,12 @@ final class ForceEjectTests: XCTestCase {
             XCTAssertFalse(h.calls.contains { $0.contains("force") })
         }
     }
-    func testUnreadableImageInventoryDisablesForceButKeepsNormalSystemRoute() throws {
+    func testUnreadableImageInventoryDisablesForceAndSystemRoute() throws {
         let h = FlowHarness(), plan = try forcePlan(h)
         h.failures["hdiutil info -plist"] = .init(stdout: Data(), stderr: "denied", exitCode: 1)
         guard case .preview(let fresh) = h.flow.execute(plan, mode: .force) else { return XCTFail("reconfirm unavailable scope") }
         XCTAssertFalse(fresh.canForce)
-        XCTAssertTrue(fresh.canSystemOnly)
+        XCTAssertFalse(fresh.canSystemOnly)
         XCTAssertFalse(h.calls.contains { $0.contains("force") })
     }
     func testImageMountedOccupantsAreScannedAndDuplicateProcessesActOnce() throws {
@@ -235,7 +235,7 @@ final class ForceEjectTests: XCTestCase {
         let plan = try h.flow.prepare()
         XCTAssertFalse(plan.imagesKnown)
         XCTAssertFalse(plan.canPrepare)
-        XCTAssertTrue(plan.canSystemOnly)
+        XCTAssertFalse(plan.canSystemOnly)
         XCTAssertFalse(plan.canForce)
     }
 

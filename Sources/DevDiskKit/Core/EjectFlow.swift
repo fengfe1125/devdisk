@@ -9,6 +9,8 @@ struct EjectPlan: Equatable {
     let images: [DiskImage]
     let issues: [Message]
     var imagesKnown = true
+    var simulators: [SimulatorDevice] = []
+    var simulatorsKnown = true
     var forceConfirmation = false
     var forceUsed = false
     var completedApps: Int = 0
@@ -23,7 +25,7 @@ struct EjectPlan: Equatable {
     var apps: [Holder] { holders.filter { $0.kind == .guiApp } }
     var daemons: [Holder] { holders.filter { $0.kind == .daemon } }
     var writableImages: [DiskImage] { images.filter { $0.writable || !$0.accessKnown } }
-    var incomplete: Bool { !issues.isEmpty }
+    var incomplete: Bool { !issues.isEmpty || !imagesKnown || !simulatorsKnown }
     var canPrepare: Bool { canPrepare(approvedTasks: selectedTasks) }
     func canPrepare(approvedTasks: Set<ProcessIdentity>) -> Bool {
         !incomplete && !target.multipleVolumes
@@ -31,11 +33,11 @@ struct EjectPlan: Equatable {
     }
     var needsContinuation: Bool { !requested.isEmpty }
     var requiresConfirmation: Bool {
-        incomplete || target.multipleVolumes || !manual.isEmpty || !images.isEmpty || !apps.isEmpty || !daemons.isEmpty
+        incomplete || target.multipleVolumes || !manual.isEmpty || !images.isEmpty || !apps.isEmpty || !daemons.isEmpty || !simulators.isEmpty
     }
-    var canSystemOnly: Bool { true }
+    var canSystemOnly: Bool { simulatorsKnown && simulators.isEmpty }
     var canForce: Bool {
-        imagesKnown && failure?.allowsForce == true && !target.affected.isEmpty
+        imagesKnown && simulatorsKnown && simulators.isEmpty && failure?.allowsForce == true && !target.affected.isEmpty
             && target.affected.allSatisfy { !$0.uuid.isEmpty }
     }
     var processScope: Set<ProcessIdentity> { Set((apps + daemons + manual).compactMap(\.identity)) }
@@ -71,8 +73,11 @@ final class EjectFlow: @unchecked Sendable {
     let cancellation: CancellationToken
     var inspector: ProcessInspecting = SystemProcessInspector()
     var targets: TargetInspecting = SystemTargetInspector()
+    var simulatorInspector: SimulatorInspecting = SystemSimulatorInspector()
     var expectedVolume: TargetVolume?
     var quitTimeout: TimeInterval = 20
+    var simulatorShutdownTimeout: TimeInterval = 60
+    var simulatorPollInterval: TimeInterval = 0.25
     var sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     var now: () -> Date = Date.init
     var monotonicNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -124,6 +129,11 @@ final class EjectFlow: @unchecked Sendable {
         var holders: [Holder] = []
         var issues = images.issues
         let mounts = Set(target.affected.map(\.mount) + (images.value ?? []).flatMap(\.mountPoints))
+        let simulatorProbe = ProbeResult<[SimulatorDevice]>.capture {
+            let inventory = try simulatorInspector.devices(runner: scoped)
+            return inventory.filter { $0.needsShutdown && SimulatorScope.isRelated($0, to: Array(mounts)) }
+        }
+        issues += simulatorProbe.issues
         for mount in mounts.sorted() {
             let result = ProbeResult<OccupancyReport>.capture {
                 try occ.fullScan(mountPoint: mount, indexingOn: indexingOn)
@@ -144,7 +154,11 @@ final class EjectFlow: @unchecked Sendable {
             throw ProbeFailure(M("ejectflow.the.target.drive.or.related.volumes.changed.during"))
         }
         return EjectPlan(target: target, createdAt: now(), holders: holders,
-                         images: images.value ?? [], issues: issues, imagesKnown: images.isComplete)
+                         images: images.value ?? [], issues: issues, imagesKnown: images.isComplete,
+                         simulators: simulatorProbe.value ?? [],
+                         // An image mounted elsewhere can still contain simulator data.
+                         // If its backing relationship is unknown, simulator scope is unknown too.
+                         simulatorsKnown: simulatorProbe.isComplete && images.isComplete)
     }
 
     /// No side effect until preflight either needs no preparation or receives confirmation.
@@ -166,6 +180,7 @@ final class EjectFlow: @unchecked Sendable {
         forceUsed = approved.forceUsed
         relatedImages = approved.images + (approved.failure?.relatedImages ?? [])
         steps = [Step(id: "validate", title: M("ejectflow.verify.target.and.scope")),
+                 Step(id: "simulators", title: M("ejectflow.shutdown.related.simulators")),
                  Step(id: "apps", title: M("ejectflow.request.apps.to.quit")), Step(id: "daemons", title: M("ejectflow.stop.approved.background.services")),
                  Step(id: "images", title: M("ejectflow.eject.read.only.disk.images")), Step(id: "recheck", title: M("ejectflow.recheck.open.files")),
                  Step(id: "unmount", title: M("ejectflow.ask.macos.to.eject")), Step(id: "verify", title: M("ejectflow.verify.eject.result"))]
@@ -181,7 +196,11 @@ final class EjectFlow: @unchecked Sendable {
             }
             if systemOnly {
                 guard approved.canSystemOnly else { throw ProbeFailure(M("ejectflow.this.preflight.does.not.allow.preparation.to.be")) }
+                let fresh = try prepare()
+                guard fresh.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
+                guard fresh.simulatorsKnown, fresh.simulators.isEmpty else { return previewOutcome(fresh) }
                 set("validate", .done(M("ejectflow.only.attempt.a.normal.system.eject.leave.apps")))
+                set("simulators", .skipped(M("simulatorprobe.no.related.devices")))
                 for id in ["apps", "daemons", "images", "recheck"] { set(id, .skipped(M("ejectflow.user.chose.to.attempt.system.eject.only"))) }
             } else {
                 // Account for requests completed while the user handled a save dialog.
@@ -191,8 +210,53 @@ final class EjectFlow: @unchecked Sendable {
                 let fresh = try prepare()
                 guard fresh.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
                 guard fresh.canPrepare(approvedTasks: selectedTasks), fresh.processScope.isSubset(of: approved.processScope),
-                      fresh.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(fresh) }
+                      fresh.images.allSatisfy({ approved.images.contains($0) }),
+                      fresh.simulators.allSatisfy({ approved.simulators.contains($0) }) else { return previewOutcome(fresh) }
                 set("validate", .done(M("ejectflow.operation.scope.verified")))
+                set("simulators", .running)
+                if fresh.simulators.isEmpty {
+                    set("simulators", .skipped(M("simulatorprobe.no.related.devices")))
+                } else {
+                    for device in fresh.simulators {
+                        try cancellation.check()
+                        let current = try prepare()
+                        guard current.target == approved.target, current.canPrepare(approvedTasks: selectedTasks),
+                              current.processScope.isSubset(of: approved.processScope),
+                              current.images.allSatisfy({ approved.images.contains($0) }),
+                              current.simulators.allSatisfy({ approved.simulators.contains($0) }) else {
+                            return previewOutcome(current)
+                        }
+                        let inventory = try simulatorInspector.devices(runner: scoped)
+                        guard let live = inventory.first(where: { $0.udid == device.udid }) else {
+                            throw ProbeFailure(M("simulatorprobe.device.disappeared", device.name))
+                        }
+                        guard live.name == device.name,
+                              live.runtimeIdentifier == device.runtimeIdentifier,
+                              live.dataPath == device.dataPath,
+                              live.runtimePath == device.runtimePath else {
+                            throw ProbeFailure(M("simulatorprobe.device.scope.changed", device.name))
+                        }
+                        if live.isShutdown { continue }
+                        guard live == device else { return previewOutcome(current) }
+                        try cancellation.check()
+                        do { try simulatorInspector.shutdown(live, runner: scoped) }
+                        catch {
+                            try cancellation.check()
+                            let afterFailure = try simulatorInspector.devices(runner: scoped)
+                            guard let observed = afterFailure.first(where: { $0.udid == live.udid }),
+                                  observed == live || observed.isShutdown else { throw error }
+                        }
+                        try waitForSimulatorShutdown(live)
+                        let after = try prepare()
+                        guard after.target == approved.target, after.canPrepare(approvedTasks: selectedTasks),
+                              after.processScope.isSubset(of: approved.processScope),
+                              after.images.allSatisfy({ approved.images.contains($0) }),
+                              after.simulators.allSatisfy({ approved.simulators.contains($0) }) else {
+                            return previewOutcome(after)
+                        }
+                    }
+                    set("simulators", .done(M("simulatorprobe.shutdown.completed", fresh.simulators.count)))
+                }
                 for (id, list) in [("apps", fresh.apps), ("daemons", fresh.daemons + fresh.manual)] {
                     set(id, .running)
                     if list.isEmpty { set(id, .skipped(M("ejectflow.nothing.needs.to.be.handled"))); continue }
@@ -202,7 +266,8 @@ final class EjectFlow: @unchecked Sendable {
                         let current = try prepare()
                         guard current.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
                         guard current.canPrepare(approvedTasks: selectedTasks), current.processScope.isSubset(of: approved.processScope),
-                              current.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(current) }
+                              current.images.allSatisfy({ approved.images.contains($0) }),
+                              current.simulators.allSatisfy({ approved.simulators.contains($0) }) else { return previewOutcome(current) }
                         guard let identity = holder.identity,
                               current.holders.contains(where: { $0.identity == identity && $0.kind == holder.kind }) else { continue }
                         guard let live = try inspector.identity(identity.pid) else { continue }
@@ -243,7 +308,8 @@ final class EjectFlow: @unchecked Sendable {
                     let current = try prepare()
                     guard current.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
                     guard current.canPrepare(approvedTasks: selectedTasks), current.processScope.isSubset(of: approved.processScope),
-                          current.images.allSatisfy({ approved.images.contains($0) }) else { return previewOutcome(current) }
+                          current.images.allSatisfy({ approved.images.contains($0) }),
+                          current.simulators.allSatisfy({ approved.simulators.contains($0) }) else { return previewOutcome(current) }
                     guard current.images.contains(image) else { continue }
                     try cancellation.check()
                     if let outcome = detachImage(image, target: approved.target, force: false) { return outcome }
@@ -315,6 +381,7 @@ final class EjectFlow: @unchecked Sendable {
             }
             func inScope(_ plan: EjectPlan) -> Bool {
                 plan.imagesKnown && plan.target == approved.target
+                    && plan.simulatorsKnown && plan.simulators.isEmpty
                     && plan.images.allSatisfy { approved.images.contains($0) }
                     && now().timeIntervalSince(approved.createdAt) <= 30
             }
@@ -381,6 +448,9 @@ final class EjectFlow: @unchecked Sendable {
     private func detachImage(_ image: DiskImage, target: EjectTarget, force: Bool) -> Outcome? {
         let stage = force ? "force-images" : "images"
         do {
+            let current = try prepare()
+            guard current.target == target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
+            guard current.simulatorsKnown, current.simulators.isEmpty else { return previewOutcome(current) }
             guard cancellation.commit() else { throw ProbeFailure(M("ejectflow.operation.cancelled")) }
             if force { forceUsed = true }
             onCommit()
@@ -545,6 +615,29 @@ final class EjectFlow: @unchecked Sendable {
         return .waiting
     }
 
+    private func waitForSimulatorShutdown(_ expected: SimulatorDevice) throws {
+        let deadline = monotonicNow() + simulatorShutdownTimeout
+        while true {
+            try cancellation.check()
+            let inventory = try simulatorInspector.devices(runner: scoped)
+            guard let current = inventory.first(where: { $0.udid == expected.udid }) else {
+                throw ProbeFailure(M("simulatorprobe.device.disappeared", expected.name))
+            }
+            guard current.name == expected.name,
+                  current.runtimeIdentifier == expected.runtimeIdentifier,
+                  current.dataPath == expected.dataPath,
+                  current.runtimePath == expected.runtimePath else {
+                throw ProbeFailure(M("simulatorprobe.device.scope.changed", expected.name))
+            }
+            if current.isShutdown { return }
+            let remaining = deadline - monotonicNow()
+            guard remaining > 0.001 else {
+                throw ProbeFailure(M("simulatorprobe.shutdown.timed.out", expected.name))
+            }
+            sleep(min(simulatorPollInterval, remaining))
+        }
+    }
+
     private func creditExit(_ identity: ProcessIdentity) {
         guard let kind = requested[identity], credited.insert(identity).inserted else { return }
         if kind == .guiApp { stoppedApps += 1 } else { stoppedDaemons += 1 }
@@ -602,6 +695,11 @@ final class EjectFlow: @unchecked Sendable {
             else if try targets.target(at: mountPoint, runner: scoped) != approved.target {
                 throw ProbeFailure(M("ejectflow.the.target.s.identity.or.related.volumes.changed.e989"))
             }
+            let simulatorCheck = try prepare(unmountedTarget: allowUnmounted ? approved.target : nil)
+            guard simulatorCheck.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
+            guard simulatorCheck.simulatorsKnown, simulatorCheck.simulators.isEmpty else {
+                return previewOutcome(simulatorCheck)
+            }
             guard cancellation.commit() else { throw ProbeFailure(M("ejectflow.operation.cancelled")) }
             onCommit()
             set("unmount", .running)
@@ -643,7 +741,8 @@ final class EjectFlow: @unchecked Sendable {
             guard fresh.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
             // Never turn a dissenter PID alone into permission to signal it: only
             // fresh file evidence and verified identity can enable preparation.
-            if !fresh.processScope.isEmpty || !fresh.images.isEmpty {
+            if !fresh.processScope.isEmpty || !fresh.images.isEmpty
+                || !fresh.simulatorsKnown || !fresh.simulators.isEmpty {
                 return previewOutcome(fresh, notice: reason)
             }
             guard !fresh.incomplete, !systemOnly || !approved.incomplete,
@@ -659,7 +758,8 @@ final class EjectFlow: @unchecked Sendable {
             }
             let next = try prepare()
             guard next.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
-            if next.incomplete || !next.processScope.isEmpty || !next.images.isEmpty {
+            if next.incomplete || !next.processScope.isEmpty || !next.images.isEmpty
+                || !next.simulatorsKnown || !next.simulators.isEmpty {
                 return previewOutcome(next, notice: reason)
             }
         }

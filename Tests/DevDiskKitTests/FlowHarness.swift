@@ -7,6 +7,7 @@ final class FlowHarness: CommandRunner, @unchecked Sendable {
     static let mount = "/Volumes/ReviewDisk"
     let targetInspector = FakeTargetInspector()
     let processes = FakeProcessInspector()
+    let simulatorInspector = FakeSimulatorInspector()
     var args: [Int32: String] = [:]
     var files: [Int32: [String]] = [:]
     var images: [DiskImage] = []
@@ -21,10 +22,13 @@ final class FlowHarness: CommandRunner, @unchecked Sendable {
         let flow = EjectFlow(runner: self, mountPoint: Self.mount, cancellation: cancellation)
         flow.inspector = processes
         flow.targets = targetInspector
+        flow.simulatorInspector = simulatorInspector
         flow.now = { self.clock }
         flow.monotonicNow = { self.clock.timeIntervalSince1970 }
         flow.sleep = { self.clock += $0 }
         flow.quitTimeout = 0.3
+        flow.simulatorShutdownTimeout = 0.3
+        flow.simulatorPollInterval = 0.1
         return flow
     }
     func add(pid: Int32 = 123, executable: String = "/usr/bin/java", args command: String = "java org.gradle.launcher.daemon.bootstrap.GradleDaemon 8.14",
@@ -152,5 +156,37 @@ final class FakeTargetInspector: TargetInspecting {
                      physicalDiskPresent: !result,
                      mountedVolumes: result || unmounted ? [] : target.affected,
                      relatedMountsKnown: true, issue: nil)
+    }
+}
+
+final class FakeSimulatorInspector: SimulatorInspecting {
+    var live: [SimulatorDevice] = []
+    var failList = false
+    var refuseShutdown = false
+    var shutdownCompletes = true
+    var shutdowns: [String] = []
+    var onList: (() -> Void)?
+    var onShutdown: ((SimulatorDevice) -> Void)?
+
+    func devices(runner: CommandRunner) throws -> [SimulatorDevice] {
+        if failList { throw ProbeFailure("simulator inventory unavailable") }
+        onList?()
+        return live
+    }
+
+    func shutdown(_ device: SimulatorDevice, runner: CommandRunner) throws {
+        guard !refuseShutdown else { throw ProbeFailure("simulator shutdown refused") }
+        guard let index = live.firstIndex(where: { $0.udid == device.udid }) else {
+            throw ProbeFailure("simulator disappeared")
+        }
+        shutdowns.append(device.udid)
+        onShutdown?(device)
+        if shutdownCompletes {
+            let current = live[index]
+            live[index] = SimulatorDevice(udid: current.udid, name: current.name,
+                                          runtimeIdentifier: current.runtimeIdentifier,
+                                          state: "Shutdown", dataPath: current.dataPath,
+                                          runtimePath: current.runtimePath)
+        }
     }
 }

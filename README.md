@@ -36,7 +36,7 @@ If your development setup lives on an external drive, this probably sounds famil
 
 - **Shows the drive's status in your menu bar:** connected, needs attention, ejecting, or safe to unplug.
 - **Finds what's using the drive.** It lists the programs holding files on it, split into ones it can close for you and ones you'll need to close yourself.
-- **Ejects safely, in the right order.** After you confirm, it asks apps like Xcode and Android Studio to quit normally (they still ask you to save your work), stops the Gradle and Kotlin daemons and adb, ejects the drive, and checks that the drive is really gone before telling you it's safe to unplug.
+- **Ejects safely, in the right order.** After you confirm, it normally shuts down Apple simulators stored on the target drive, asks apps like Xcode and Android Studio to quit normally (they still ask you to save your work), stops the Gradle and Kotlin daemons and adb, ejects the drive, and checks that the drive is really gone before telling you it's safe to unplug.
 - **Gives the drive a checkup:** free space and what's taking it up, drive health (life left, temperature, unexpected power losses), encryption, and whether Time Machine, Spotlight, or disk sleep settings could cause trouble.
 - **Warns you about a common trap.** While the drive is unplugged, it reminds you not to open Android Studio — it may think your SDK is missing and download the whole thing again onto your Mac's internal disk.
 
