@@ -78,6 +78,7 @@ enum Tool {
     static let du             = "/usr/bin/du"
     static let osascript      = "/usr/bin/osascript"
     static let hdiutil        = "/usr/bin/hdiutil"
+    static let xcrun          = "/usr/bin/xcrun"
 
     /// nil when smartmontools is not installed — the health section degrades instead of failing.
     static let smartctl: String? = {

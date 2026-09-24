@@ -46,6 +46,19 @@ struct EjectPreviewView: View {
                         }
                     }
                 }
+                if !plan.simulators.isEmpty {
+                    PanelSection(title: L("ejectpreviewview.related.simulators")) {
+                        Text(L("ejectpreviewview.simulators.will.shutdown.normally"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        ForEach(plan.simulators) { device in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(device.name).font(.system(size: 12, weight: .medium))
+                                Text("\(device.displayRuntime) · \(device.state)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
                 if !plan.forceConfirmation {
                     group(L("ejectpreviewview.apps.to.request.to.quit"), plan.apps, note: L("ejectpreviewview.quitting.affects.the.entire.app.each.app.handles"))
                     group(L("ejectpreviewview.approved.background.services.to.stop"), plan.daemons, note: L("ejectpreviewview.services.may.still.be.working.after.confirmation.sends"))
@@ -106,7 +119,9 @@ struct EjectPreviewFooter: View {
                         .disabled(!plan.canForce)
                 } else {
                     if plan.canPrepare {
-                        PrimaryButton(title: L(plan.needsContinuation ? "ejectpreviewview.continue.checking" : "ejectpreviewview.confirm.and.eject"), symbol: "eject.fill") { store.confirmEject() }
+                        let title = plan.needsContinuation ? "ejectpreviewview.continue.checking"
+                            : (plan.simulators.isEmpty ? "ejectpreviewview.confirm.and.eject" : "ejectpreviewview.shutdown.simulators.and.eject")
+                        PrimaryButton(title: L(title), symbol: "eject.fill") { store.confirmEject() }
                     }
                     if plan.canSystemOnly {
                         PrimaryButton(title: L("ejectpreviewview.try.system.eject.only"), symbol: "eject") { store.confirmEject(mode: .systemOnly) }
@@ -116,6 +131,10 @@ struct EjectPreviewFooter: View {
                     if store.canOfferForce {
                         Button(L("ejectforce.action")) { store.requestForceEject() }.buttonStyle(.bordered)
                     }
+                }
+                if !plan.canSystemOnly {
+                    Text(L("ejectpreviewview.simulator.check.must.complete"))
+                        .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
                 }
                 HStack {
                     Button(L("ejectpreviewview.scan.again")) { store.retryPreflight() }

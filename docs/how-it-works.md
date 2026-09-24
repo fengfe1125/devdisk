@@ -24,15 +24,18 @@ Clicking **Safe Eject** first runs a read-only check. If nothing needs handling,
 | Nothing to prepare | Tries a normal `diskutil eject` and lets macOS decide |
 | Something it can handle | Shows the target drive, what it will act on, the file evidence, and the impact; acts after you confirm |
 | Incomplete check | Re-check, cancel, or explicitly choose "Only try a system eject" |
+| A target-related simulator is booted, or simulator state cannot be verified | Normally shut it down and verify first; if the service or check fails, stop without system-only or force bypass |
 | Current-user terminal tasks and unknown background tasks with verified identities | Offers unchecked termination choices, with a warning that work may be interrupted |
 | Unverifiable processes | Leaves processes alone; normal system eject remains available |
 | Writable, read-only or unknown-access images | Normal detach after confirmation, including attached but unmounted images |
 | Several mounted volumes on the same physical drive | Lists related volumes; ordinary eject does not close processes. After a normal refusal, force requires a separate confirmation |
 | The target changed, isn't an external physical drive, or its layout can't be confirmed | Stops and hands it back to you |
 
-"Only try a system eject" doesn't quit apps, stop services, or detach images, and never uses force. When a check is incomplete, DevDisk doesn't claim nobody is using the drive.
+"Only try a system eject" doesn't quit apps, stop services, or detach images, and never uses force. It is disabled while a target-related simulator is active or its state is unknown. When a check is incomplete, DevDisk doesn't claim nobody is using the drive.
 
-After you confirm, the order is: confirm the target and scope → ask GUI apps to quit → stop the specific services → normally detach related images → re-check → system eject → verify images are detached and related volumes are unmounted. Fixed external devices can remain in the system disk list.
+After you confirm, the order is: confirm the target and scope → normally shut down and verify booted Apple simulators stored on the target → ask GUI apps to quit → stop the specific services → normally detach related images → re-check → system eject → verify images are detached and related volumes are unmounted. Fixed external devices can remain in the system disk list.
+
+Simulator scope is established from actual device-data, runtime, and related-image paths. Only devices in the confirmed target scope are shut down. If the device inventory, runtime path, or CoreSimulatorService cannot be verified, the state stays unknown: DevDisk does not detach images or eject the disk, and system-only or force actions cannot bypass the check. You can shut down simulators manually in Xcode Device Hub and scan again.
 
 ### What DevDisk may handle for you
 
@@ -48,7 +51,7 @@ A refused system eject retains its raw error, stage, blocking PID, and completed
 
 ### Force eject after an ordinary failure
 
-After a definite normal detach or disk-eject refusal, **Force eject…** performs a fresh read-only check and lists every affected volume and image. The user must confirm the risk of lost unsaved data or damaged images. Confirmation applies only to this operation; an expired confirmation or expanded scope requires another review.
+After a definite normal detach or disk-eject refusal, **Force eject…** performs a fresh read-only check and lists every affected volume and image. The user must confirm the risk of lost unsaved data or damaged images. Confirmation applies only to this operation; an expired confirmation or expanded scope requires another review. An active or unverifiable target-related simulator blocks force eject.
 
 The sequence is force detach dependent images, verify they are detached, `diskutil unmountDisk force`, then ordinary `diskutil eject`. It never force-kills apps or system services and never elevates privileges. After unmount, the original UUIDs, device identifiers and physical-store mapping are checked without relying on vanished mount paths. Completed detach and unmount steps are not repeated.
 
