@@ -38,6 +38,8 @@ struct EjectPreviewView: View {
                 }
                 if plan.target.multipleVolumes || plan.forceConfirmation || plan.forceProcessConfirmation == .closeAndEject {
                     PanelSection(title: L("ejectpreviewview.ejecting.the.disk.affects.these.volumes")) {
+                        Text(M("ejectfailure.disk", plan.target.physicalDisk))
+                            .font(.caption).textSelection(.enabled)
                         ForEach(plan.target.affected, id: \.device) { volume in
                             Text("\(volume.name) · \(volume.mount)").font(.caption)
                         }

@@ -148,7 +148,12 @@ final class DiskStore: ObservableObject {
                     screen = .connected
                     ejectFailure = M("diskstore.mount.state.changed.the.preview.is.no.longer")
                     refresh()
-                } else if ejectPlan?.forceConfirmation != true { cancelEject() }
+                } else if ejectPlan?.forceConfirmation != true
+                            && ejectPlan?.forceProcessConfirmation != .closeAndEject {
+                    cancelEject()
+                }
+                // Forced disk routes expect their own unmount notifications.
+                // Their execution boundary still revalidates target and scope.
             }
             return
         }

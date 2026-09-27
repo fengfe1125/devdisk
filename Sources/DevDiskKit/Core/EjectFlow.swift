@@ -862,13 +862,20 @@ final class EjectFlow: @unchecked Sendable {
                 return previewOutcome(simulatorCheck)
             }
             if approved.forceProcessConfirmation == .closeAndEject {
-                // After unmount there may be no filesystem left for lsof. Still
-                // reject newly visible identities or image dependencies; target and
-                // attachment verification remain mandatory at this boundary.
                 guard simulatorCheck.reviewedProcessScope.isSubset(of: approved.reviewedProcessScope),
-                      simulatorCheck.images.isEmpty,
-                      allowUnmounted || !simulatorCheck.incomplete else {
+                      simulatorCheck.images.isEmpty else {
                     return forceProcessPreview(simulatorCheck, action: .closeAndEject)
+                }
+                if simulatorCheck.incomplete {
+                    // allowUnmounted is a mode, not evidence: the same volume may
+                    // have remounted since force-unmount. Only freshly verified
+                    // absence of all related mounts can explain a missing scan.
+                    let observed = targets.ejectVerification(approved.target, runner: scoped, timeout: Deadline.quick)
+                    guard allowUnmounted, observed.issue == nil, observed.relatedMountsKnown,
+                          observed.mountedVolumes.isEmpty,
+                          observed.state == .unmounted || observed.state == .offline else {
+                        return forceProcessPreview(simulatorCheck, action: .closeAndEject)
+                    }
                 }
             }
             guard cancellation.commit() else { throw ProbeFailure(M("ejectflow.operation.cancelled")) }

@@ -96,6 +96,35 @@ final class StoreReliabilityTests: XCTestCase {
         XCTAssertEqual(h.calls.filter { $0 == "diskutil unmountDisk force disk90" }.count, 1)
     }
 
+    func testJointForceIgnoresItsOwnDelayedUnmountNotificationBeforeFinalEject() async {
+        let h = FlowHarness(); h.add(app: "editor")
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        store.applyDiscovery([drive("ReviewDisk", uuid: "review-uuid")])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+        store.eject(); await wait(store, for: .awaitingConfirmation)
+        store.selectAllForceProcesses(true)
+        store.requestForceProcesses(.closeAndEject); await wait(store, for: .awaitingConfirmation)
+        let reached = expectation(description: "after unmount, before final eject")
+        let resume = DispatchSemaphore(value: 0)
+        var intercepted = false
+        h.targetInspector.beforeRead = {
+            if h.targetInspector.unmounted && !h.cancellation.isCommitted && !intercepted {
+                intercepted = true
+                reached.fulfill()
+                _ = resume.wait(timeout: .now() + 3)
+            }
+        }
+        store.confirmEject(mode: .forceProcesses)
+        await fulfillment(of: [reached], timeout: 2)
+        store.mountsChanged(path: FlowHarness.mount)
+        XCTAssertEqual(store.operation, .executing)
+        XCTAssertFalse(h.cancellation.isCancelled)
+        resume.signal()
+        await wait(store, for: .finished)
+        guard case .ejected = store.screen else { return XCTFail("own notification must not cancel final eject") }
+        XCTAssertEqual(h.calls.filter { $0 == "diskutil eject disk90" }.count, 1)
+    }
+
     func testTaskSelectionAndConfirmationUseSharedStoreState() async {
         let h = FlowHarness(); h.add(executable: "/bin/zsh", args: "zsh")
         let store = DiskStore(runner: h, defaults: defaults(), start: false)

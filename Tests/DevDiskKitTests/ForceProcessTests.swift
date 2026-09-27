@@ -311,6 +311,30 @@ final class ForceProcessTests: XCTestCase {
         XCTAssertTrue(h.processes.forced.isEmpty)
     }
 
+    func testPostUnmountScanFailureRequiresFreshProofVolumesRemainUnmounted() throws {
+        for state in ["unmounted", "remounted", "unknown"] {
+            let h = FlowHarness(); h.add(app: "editor")
+            let p = try confirmed(h)
+            let f = h.flow
+            f.onSystemReturned = {
+                guard h.targetInspector.unmounted else { return }
+                h.failures["lsof -nP +w -F pcLfn +f -- " + FlowHarness.mount] =
+                    .init(stdout: Data(), stderr: "filesystem unavailable", exitCode: 1)
+                if state == "remounted" { h.targetInspector.unmounted = false }
+                if state == "unknown" { h.targetInspector.verifyError = true }
+            }
+            let result = f.execute(p, mode: .forceProcesses)
+            if state == "unmounted" {
+                guard case .ejected = result else { return XCTFail("verified unmounted target can finish") }
+                XCTAssertTrue(h.calls.contains("diskutil eject disk90"))
+            } else {
+                guard case .preview(let review) = result else { return XCTFail("unknown scope must stop: \(state)") }
+                XCTAssertTrue(review.incomplete)
+                XCTAssertFalse(h.calls.contains("diskutil eject disk90"))
+            }
+        }
+    }
+
     func testForcedImageFailureRetainsProcessHistoryInDiagnostic() throws {
         let h = FlowHarness(); h.add(app: "editor")
         h.images = [.init(path: FlowHarness.mount + "/a.dmg", writable: true, devEntries: ["/dev/disk91"], mountPoints: [])]
