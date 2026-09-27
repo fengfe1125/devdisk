@@ -20,9 +20,10 @@ struct EjectFailure: Equatable {
     var allowsForce = false
     var relatedImages: [DiskImage] = []
     var pendingImage: DiskImage? = nil
+    var forceRequested: Set<ProcessIdentity> = []
 
     private var stageLabel: String {
-        let keys = ["validate": "ejectflow.verify.target.and.scope", "apps": "ejectflow.request.apps.to.quit",
+        let keys = ["force-processes": "forceprocess.close.selected", "validate": "ejectflow.verify.target.and.scope", "apps": "ejectflow.request.apps.to.quit",
                     "simulators": "ejectflow.shutdown.related.simulators",
                     "daemons": "ejectflow.stop.approved.background.services", "images": "ejectflow.eject.read.only.disk.images",
                     "recheck": "ejectflow.recheck.open.files", "unmount": "ejectflow.ask.macos.to.eject",
@@ -36,6 +37,7 @@ struct EjectFailure: Equatable {
          M("ejectfailure.disk", target.physicalDisk).text, M("ejectfailure.stage", stageLabel).text,
          M("ejectfailure.pid", blockingPID.map(String.init) ?? L("ejectfailure.unknown")).text,
          M("ejectflow.apps.quit.service.processes.stopped.images.ejected.requests", completedApps, completedProcesses, completedImages).text]
+        if !forceRequested.isEmpty { lines.append(L("forceprocess.requests", forceRequested.count)) }
         if forceUsed { lines.append(L("ejectforce.used")) }
         if let commandExitCode {
             lines.append(M("ejectfailure.command.result", commandExitCode,

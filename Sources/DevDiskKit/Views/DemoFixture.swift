@@ -23,6 +23,10 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, Sim
         if scenario.contains("tasks") {
             live[90100] = .init(pid: 90100, uid: getuid(), startedSeconds: 42, startedMicros: 0, executable: "/bin/zsh")
         }
+        if scenario.contains("force") {
+            live[90101] = .init(pid: 90101, uid: getuid(), startedSeconds: 42, startedMicros: 0, executable: "/usr/bin/java")
+            live[90102] = .init(pid: 90102, uid: getuid(), startedSeconds: 42, startedMicros: 0, executable: "/usr/libexec/demo-service")
+        }
         if scenario.contains("simulators") {
             simulators = [.init(udid: "DEMO-SIM-001", name: "iPhone 演示设备",
                                 runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-演示版",
@@ -58,6 +62,11 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, Sim
                                   runtimeIdentifier: device.runtimeIdentifier, state: "Shutdown",
                                   dataPath: device.dataPath, runtimePath: device.runtimePath)
     }
+    func forceClose(_ identity: ProcessIdentity) throws {
+        guard live[identity.pid] == identity, identity.canForceClose else { throw ProbeFailure("demo identity changed") }
+        if scenario.contains("closerefused") { throw ProbeFailure("demo force close refused") }
+        live.removeValue(forKey: identity.pid)
+    }
     func requestQuit(_ identity: ProcessIdentity) throws {
         if !scenario.contains("running") && !scenario.contains("save") { live.removeValue(forKey: identity.pid) }
     }
@@ -76,7 +85,12 @@ final class DemoMachine: CommandRunner, ProcessInspecting, TargetInspecting, Sim
             .init(stdout: Data(text.utf8), stderr: "", exitCode: code)
         }
         switch path {
-        case Tool.ps: return result("1 root /sbin/launchd\n" + live.keys.map { "\($0) demo /Applications/Demo.app/Contents/MacOS/editor" }.joined(separator: "\n"))
+        case Tool.ps:
+            return result("1 root /sbin/launchd\n" + live.keys.map { pid in
+                let command = pid == 90101 ? "java org.gradle.launcher.daemon.bootstrap.GradleDaemon"
+                    : live[pid]!.executable
+                return "\(pid) demo \(command)"
+            }.joined(separator: "\n"))
         case Tool.lsof:
             if args.last != mount { return result("", code: 1) }
             if scenario.contains("unknown") { return .init(stdout: Data(), stderr: "演示：检测超时，结果不完整", exitCode: -1, timedOut: true) }

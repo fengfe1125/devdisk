@@ -100,11 +100,21 @@ final class FakeProcessInspector: ProcessInspecting {
     var live: [Int32: ProcessIdentity] = [:]
     var quits: [Int32] = []
     var refuseQuit = false
+    var forced: [Int32] = []
+    var forceWorks = true
+    var rejectForce = false
+    var onForce: (() -> Void)? = nil
     var failIdentity = false
     var onQuit: (() -> Void)?
     func identity(_ pid: Int32) throws -> ProcessIdentity? {
         if failIdentity { throw ProbeFailure("identity denied") }
         return live[pid]
+    }
+    func forceClose(_ identity: ProcessIdentity) throws {
+        guard live[identity.pid] == identity, identity.canForceClose, !rejectForce else { throw ProbeFailure("force refused") }
+        forced.append(identity.pid)
+        if forceWorks { live.removeValue(forKey: identity.pid) }
+        onForce?()
     }
     func requestQuit(_ identity: ProcessIdentity) throws {
         guard live[identity.pid] == identity else { throw ProbeFailure("identity changed") }

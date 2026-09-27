@@ -48,13 +48,15 @@ If your development setup lives on an external drive, this probably sounds famil
 
 ## What it will never do
 
-- Force-quit your apps or services, or force-eject without a separate confirmation.
+- Force-close apps or processes, or force-eject, without a separate confirmation of the exact scope and data-loss risk.
 - Close something just because its name matches. It only acts on a program it can see holding files on this drive.
 - Tell you "nobody is using it" or "safe to unplug" without checking. If a check fails or times out, it tells you.
 - Touch system processes or other users' processes.
 - Ask for admin rights. When a system setting needs changing, it gives you a command to copy instead of running it for you.
 
 Verified terminal and background tasks can also be selected explicitly for termination; these choices start unchecked and may interrupt work. Unverified processes remain manual. If an app is waiting for you to save, use **Continue checking and eject** afterwards. System refusals retain the blocking PID and error details.
+
+After preflight, **Select all / Deselect all** covers verified current-user apps, services and other tasks. **Force close selected…** closes only the selected occupants and rescans without ejecting. **Force close and force eject…** is available without first failing ordinary eject: its separate confirmation lists occupants, images and all affected volumes. With nothing selected, the action reads **Force eject…** and explicitly closes no apps or processes. System/other-user/unverified occupants cannot be selected. Force closing is unavailable on multi-volume targets or while related simulators are active. Scope changes require review again; failed or unverified process closure stops disk actions. App closure can also lose unsaved work on other disks.
 
 Writable disk images can be detached normally after confirmation. If normal detach or eject fails, **Force eject…** shows the affected images and volumes and asks you to accept the risk of lost unsaved data or damaged images. Force is never automatic; timeout results are checked before further action. A forced result is clearly labelled.
 
