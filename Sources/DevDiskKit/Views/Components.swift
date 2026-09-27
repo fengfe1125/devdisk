@@ -19,6 +19,11 @@ enum UI {
         let available = NSScreen.main?.visibleFrame.height ?? 900
         return max(320, available - 220)
     }
+    /// Reserve the measured non-scrolling controls plus title/arrow, dividers and
+    /// a small edge margin. The force-action footer is taller than the normal one.
+    static func boundedBodyHeight(preferred: CGFloat, available: CGFloat, chrome: CGFloat) -> CGFloat {
+        max(1, min(preferred, available - chrome - 48))
+    }
     static let hPad: CGFloat = 14
     static let vPad: CGFloat = 12
 

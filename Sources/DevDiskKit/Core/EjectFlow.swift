@@ -1,6 +1,7 @@
 import Foundation
 
-enum EjectMode { case prepared, systemOnly, force }
+enum EjectMode { case prepared, systemOnly, force, forceProcesses }
+enum ForceProcessAction: Equatable { case closeOnly, closeAndEject }
 
 struct EjectPlan: Equatable {
     let target: EjectTarget
@@ -17,6 +18,20 @@ struct EjectPlan: Equatable {
     var completedDaemons: Int = 0
     var completedImages: Int = 0
     var selectedTasks: Set<ProcessIdentity> = []
+    var selectedForceProcesses: Set<ProcessIdentity> = []
+    var forceProcessConfirmation: ForceProcessAction? = nil
+    var forceRequested: Set<ProcessIdentity> = []
+    var forceEligible: Set<ProcessIdentity> {
+        Set(holders.filter { $0.kind != .system && ($0.openFileCount ?? 0) > 0 }
+            .compactMap(\.identity).filter(\.canForceClose))
+    }
+    var reviewedProcessScope: Set<ProcessIdentity> { Set(holders.compactMap(\.identity)) }
+    var canForceProcesses: Bool {
+        !incomplete && simulators.isEmpty && !target.multipleVolumes
+            && !target.affected.isEmpty && target.affected.allSatisfy { !$0.uuid.isEmpty }
+            && selectedForceProcesses.isSubset(of: forceEligible)
+    }
+    var canCloseSelected: Bool { canForceProcesses && !selectedForceProcesses.isEmpty }
     var requested: [ProcessIdentity: HolderKind] = [:]
     var credited: Set<ProcessIdentity> = []
     var notice: Message? = nil
@@ -98,6 +113,9 @@ final class EjectFlow: @unchecked Sendable {
     private var stoppedDaemons = 0
     private var detachedImages = 0
     private var forceUsed = false
+    private var selectedForceProcesses: Set<ProcessIdentity> = []
+    private var forceRequested: Set<ProcessIdentity> = []
+    var onForceProcesses: (Set<ProcessIdentity>) -> Void = { _ in }
     private var relatedImages: [DiskImage] = []
     private var completedDetail: Message {
         M("ejectflow.apps.quit.service.processes.stopped.images.ejected.requests", stoppedApps, stoppedDaemons, detachedImages)
@@ -165,13 +183,18 @@ final class EjectFlow: @unchecked Sendable {
     func run(indexingOn: Bool?) -> Outcome {
         do {
             let plan = try prepare(indexingOn: indexingOn)
-            if plan.requiresConfirmation { return .preview(plan) }
+            if plan.requiresConfirmation || plan.holders.contains(where: { ($0.openFileCount ?? 0) > 0 }) {
+                return .preview(plan)
+            }
             return execute(plan, mode: .prepared)
         } catch { return .aborted(error.displayMessage) }
     }
 
     func execute(_ approved: EjectPlan, mode: EjectMode) -> Outcome {
+        if mode == .forceProcesses { return executeForceProcesses(approved) }
         if mode == .force { return executeForce(approved) }
+        guard approved.forceProcessConfirmation == nil else { return .aborted(M("forceprocess.confirm.required")) }
+        restoreForceProcesses(approved)
         let systemOnly = mode == .systemOnly
         let started = now()
         stoppedApps = approved.completedApps; stoppedDaemons = approved.completedDaemons; detachedImages = approved.completedImages
@@ -330,8 +353,124 @@ final class EjectFlow: @unchecked Sendable {
         }
     }
 
+    private func restoreForceProcesses(_ plan: EjectPlan) {
+        selectedForceProcesses = plan.selectedForceProcesses
+        forceRequested = plan.forceRequested
+        onForceProcesses(forceRequested)
+    }
+
+    private func forceProcessScopeMatches(_ fresh: EjectPlan, approved: EjectPlan) -> Bool {
+        fresh.target == approved.target && !fresh.incomplete && fresh.simulators.isEmpty
+            && !fresh.target.multipleVolumes
+            && fresh.reviewedProcessScope.isSubset(of: approved.reviewedProcessScope)
+            && fresh.images.allSatisfy { approved.images.contains($0) }
+            && now().timeIntervalSince(approved.createdAt) <= 30
+    }
+
+    private func forceProcessPreview(_ fresh: EjectPlan, action: ForceProcessAction?, notice: Message? = nil) -> Outcome {
+        var next = fresh
+        next.forceProcessConfirmation = action
+        return previewOutcome(next, notice: notice)
+    }
+
+    /// Read-only: entering this page is not permission to signal a process or a disk.
+    func prepareForceProcesses(_ previous: EjectPlan, action: ForceProcessAction) -> Outcome {
+        restoreForceProcesses(previous)
+        stoppedApps = previous.completedApps; stoppedDaemons = previous.completedDaemons
+        detachedImages = previous.completedImages; forceUsed = previous.forceUsed
+        selectedTasks = previous.selectedTasks; requested = previous.requested; credited = previous.credited
+        lastFailure = previous.failure
+        do {
+            let fresh = try prepare()
+            guard fresh.target == previous.target else { throw ProbeFailure(M("ejectforce.target.changed")) }
+            return forceProcessPreview(fresh, action: action)
+        } catch { return .aborted(error.displayMessage) }
+    }
+
+    private func executeForceProcesses(_ approved: EjectPlan) -> Outcome {
+        restoreForceProcesses(approved)
+        stoppedApps = approved.completedApps; stoppedDaemons = approved.completedDaemons
+        detachedImages = approved.completedImages; forceUsed = approved.forceUsed
+        selectedTasks = approved.selectedTasks; requested = approved.requested; credited = approved.credited
+        lastFailure = approved.failure; relatedImages = approved.images
+        steps = [Step(id: "validate", title: M("ejectflow.verify.target.and.scope"), state: .running),
+                 Step(id: "force-processes", title: M("forceprocess.close.selected"))]
+        emit()
+        do {
+            guard let action = approved.forceProcessConfirmation, approved.canForceProcesses,
+                  action == .closeAndEject || approved.canCloseSelected else {
+                throw ProbeFailure(M("forceprocess.confirm.required"))
+            }
+            var fresh = try prepare()
+            guard forceProcessScopeMatches(fresh, approved: approved) else {
+                return forceProcessPreview(fresh, action: action)
+            }
+            set("validate", .done(nil)); set("force-processes", .running)
+            for identity in forceRequested where !credited.contains(identity) {
+                if try inspector.identity(identity.pid) != identity { creditExit(identity) }
+            }
+            for identity in approved.selectedForceProcesses.sorted(by: { $0.pid < $1.pid }) {
+                try cancellation.check()
+                fresh = try prepare()
+                guard forceProcessScopeMatches(fresh, approved: approved) else {
+                    return forceProcessPreview(fresh, action: action)
+                }
+                guard fresh.forceEligible.contains(identity) else {
+                    if forceRequested.contains(identity), try inspector.identity(identity.pid) != identity { creditExit(identity) }
+                    continue
+                }
+                guard try inspector.identity(identity.pid) == identity else {
+                    return forceProcessPreview(try prepare(), action: action)
+                }
+                if !forceRequested.contains(identity) {
+                    try cancellation.check()
+                    try inspector.forceClose(identity)
+                    forceRequested.insert(identity)
+                    requested[identity] = identity.bundleID == nil ? .manual : .guiApp
+                    onForceProcesses(forceRequested)
+                }
+                let deadline = monotonicNow() + quitTimeout
+                while true {
+                    try cancellation.check()
+                    fresh = try prepare()
+                    guard forceProcessScopeMatches(fresh, approved: approved) else {
+                        return forceProcessPreview(fresh, action: action)
+                    }
+                    let live = try inspector.identity(identity.pid)
+                    if live != identity { creditExit(identity); break }
+                    if !fresh.reviewedProcessScope.contains(identity) { break }
+                    let remaining = deadline - monotonicNow()
+                    guard remaining > 0.001 else { throw ProbeFailure(M("forceprocess.timeout")) }
+                    sleep(min(0.1, remaining))
+                }
+            }
+            fresh = try prepare()
+            guard forceProcessScopeMatches(fresh, approved: approved) else {
+                return forceProcessPreview(fresh, action: action)
+            }
+            set("force-processes", forceRequested.isEmpty
+                ? .skipped(M("forceprocess.no.close")) : .done(M("forceprocess.requests", forceRequested.count)))
+            if action == .closeOnly { return forceProcessPreview(fresh, action: nil) }
+            // Only this private call can authorize the direct joint disk route. The
+            // original confirmation remains the scope ceiling throughout disk actions.
+            var joint = approved
+            joint.completedApps = stoppedApps; joint.completedDaemons = stoppedDaemons
+            joint.requested = requested; joint.credited = credited; joint.forceRequested = forceRequested
+            return executeForce(joint, jointAuthorization: true)
+        } catch {
+            let reason = error.displayMessage
+            recordFailure(approved.target, stage: "force-processes", message: reason)
+            set("force-processes", .failed(reason))
+            // Preserve sent requests even after failure; refreshing never sends them again.
+            var retained = approved
+            retained.forceProcessConfirmation = nil
+            return previewOutcome(retained, notice: reason)
+        }
+    }
+
     /// A separate read-only step creates a fresh, single-use force confirmation.
     func prepareForce(_ failure: EjectFailure) -> Outcome {
+        forceRequested = failure.forceRequested; onForceProcesses(forceRequested)
         stoppedApps = failure.completedApps; stoppedDaemons = failure.completedProcesses
         detachedImages = failure.completedImages; forceUsed = failure.forceUsed
         relatedImages = failure.relatedImages; lastFailure = failure
@@ -356,7 +495,8 @@ final class EjectFlow: @unchecked Sendable {
         }
     }
 
-    private func executeForce(_ approved: EjectPlan) -> Outcome {
+    private func executeForce(_ approved: EjectPlan, jointAuthorization: Bool = false) -> Outcome {
+        restoreForceProcesses(approved)
         stoppedApps = approved.completedApps; stoppedDaemons = approved.completedDaemons
         detachedImages = approved.completedImages; forceUsed = approved.forceUsed
         relatedImages = approved.images + (approved.failure?.relatedImages ?? [])
@@ -369,14 +509,18 @@ final class EjectFlow: @unchecked Sendable {
         emit()
         let started = now()
         do {
-            guard approved.forceConfirmation, approved.canForce else { throw ProbeFailure(M("ejectforce.not.allowed")) }
+            guard jointAuthorization
+                ? approved.forceProcessConfirmation == .closeAndEject
+                : (approved.forceProcessConfirmation == nil && approved.forceConfirmation && approved.canForce)
+            else { throw ProbeFailure(M("ejectforce.not.allowed")) }
             func freshPlan() throws -> EjectPlan {
                 var plan = try prepareForForce(approved.target)
                 guard plan.target.volume == approved.target.volume,
                       plan.target.physicalDisk == approved.target.physicalDisk else {
                     throw ProbeFailure(M("ejectforce.target.changed"))
                 }
-                plan.forceConfirmation = true
+                plan.forceConfirmation = !jointAuthorization
+                plan.forceProcessConfirmation = jointAuthorization ? .closeAndEject : nil
                 return plan
             }
             func inScope(_ plan: EjectPlan) -> Bool {
@@ -384,6 +528,8 @@ final class EjectFlow: @unchecked Sendable {
                     && plan.simulatorsKnown && plan.simulators.isEmpty
                     && plan.images.allSatisfy { approved.images.contains($0) }
                     && now().timeIntervalSince(approved.createdAt) <= 30
+                    && (!jointAuthorization || (!plan.incomplete
+                        && plan.reviewedProcessScope.isSubset(of: approved.reviewedProcessScope)))
             }
             let fresh = try freshPlan()
             guard inScope(fresh) else { return previewOutcome(fresh) }
@@ -394,7 +540,8 @@ final class EjectFlow: @unchecked Sendable {
                 let current = try freshPlan()
                 guard inScope(current) else { return previewOutcome(current) }
                 guard current.images.contains(image) else { continue }
-                if let outcome = detachImage(image, target: approved.target, force: true) { return outcome }
+                if let outcome = detachImage(image, target: approved.target, force: true,
+                                             processApproval: jointAuthorization ? approved : nil) { return outcome }
             }
             set("images", .done(M("ejectflow.images.ejected", detachedImages)))
             let current = try freshPlan()
@@ -408,6 +555,10 @@ final class EjectFlow: @unchecked Sendable {
                 throw ProbeFailure(M("ejectforce.target.changed"))
             }
             if !before.mountedVolumes.isEmpty {
+                if jointAuthorization {
+                    let boundary = try freshPlan()
+                    guard inScope(boundary), boundary.images.isEmpty else { return previewOutcome(boundary) }
+                }
                 set("force-unmount", .running)
                 guard cancellation.commit() else { throw ProbeFailure(M("ejectflow.operation.cancelled")) }
                 forceUsed = true
@@ -445,12 +596,16 @@ final class EjectFlow: @unchecked Sendable {
 
     /// Disk commands are committed while running. Cancellation can stop the next step,
     /// but cannot claim an in-flight detach has been undone.
-    private func detachImage(_ image: DiskImage, target: EjectTarget, force: Bool) -> Outcome? {
+    private func detachImage(_ image: DiskImage, target: EjectTarget, force: Bool,
+                             processApproval: EjectPlan? = nil) -> Outcome? {
         let stage = force ? "force-images" : "images"
         do {
             let current = try prepare()
             guard current.target == target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
             guard current.simulatorsKnown, current.simulators.isEmpty else { return previewOutcome(current) }
+            if let processApproval, !forceProcessScopeMatches(current, approved: processApproval) {
+                return forceProcessPreview(current, action: processApproval.forceProcessConfirmation)
+            }
             guard cancellation.commit() else { throw ProbeFailure(M("ejectflow.operation.cancelled")) }
             if force { forceUsed = true }
             onCommit()
@@ -523,6 +678,7 @@ final class EjectFlow: @unchecked Sendable {
 
     /// Read-only refresh keeps completed actions and pending quit requests.
     func recheck(_ previous: EjectPlan) -> Outcome {
+        restoreForceProcesses(previous)
         stoppedApps = previous.completedApps; stoppedDaemons = previous.completedDaemons
         detachedImages = previous.completedImages; selectedTasks = previous.selectedTasks
         requested = previous.requested; credited = previous.credited; lastFailure = previous.failure
@@ -530,6 +686,7 @@ final class EjectFlow: @unchecked Sendable {
         do {
             var fresh = try prepare(unmountedTarget: previous.forceUsed ? previous.target : nil)
             fresh.forceConfirmation = previous.forceConfirmation
+            fresh.forceProcessConfirmation = previous.forceProcessConfirmation
             guard fresh.target == previous.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
             return previewOutcome(fresh, notice: previous.notice)
         } catch { return .aborted(error.displayMessage) }
@@ -539,6 +696,7 @@ final class EjectFlow: @unchecked Sendable {
     /// repeats process actions, so a late Disk Arbitration update can safely repair
     /// a previously pending result.
     func reverify(_ previous: EjectFailure) -> Outcome {
+        forceRequested = previous.forceRequested; onForceProcesses(forceRequested)
         stoppedApps = previous.completedApps
         stoppedDaemons = previous.completedProcesses
         detachedImages = previous.completedImages
@@ -576,7 +734,7 @@ final class EjectFlow: @unchecked Sendable {
                                    commandTimedOut: previous.commandTimedOut,
                                    commandCancelled: previous.commandCancelled,
                                    verificationDuration: duration, verification: verification, forceUsed: forceUsed,
-                                   relatedImages: relatedImages)
+                                   relatedImages: relatedImages, forceRequested: forceRequested)
         lastFailure = updated
         onFailure(updated)
         set("verify", .failed(reason))
@@ -589,6 +747,8 @@ final class EjectFlow: @unchecked Sendable {
         updated.completedDaemons = stoppedDaemons
         updated.completedImages = detachedImages
         updated.selectedTasks = selectedTasks.intersection(plan.processScope)
+        updated.selectedForceProcesses = selectedForceProcesses.intersection(plan.forceEligible)
+        updated.forceRequested = forceRequested
         updated.requested = requested
         updated.credited = credited
         updated.notice = notice
@@ -659,7 +819,8 @@ final class EjectFlow: @unchecked Sendable {
                                    commandCancelled: command?.cancelled ?? false,
                                    verificationDuration: verificationDuration,
                                    verification: verification, forceUsed: forceUsed, allowsForce: allowsForce,
-                                   relatedImages: relatedImages, pendingImage: pendingImage)
+                                   relatedImages: relatedImages, pendingImage: pendingImage,
+                                   forceRequested: forceRequested)
         lastFailure = failure
         onFailure(failure)
         return failure
@@ -699,6 +860,16 @@ final class EjectFlow: @unchecked Sendable {
             guard simulatorCheck.target == approved.target else { throw ProbeFailure(M("ejectflow.the.target.drive.changed")) }
             guard simulatorCheck.simulatorsKnown, simulatorCheck.simulators.isEmpty else {
                 return previewOutcome(simulatorCheck)
+            }
+            if approved.forceProcessConfirmation == .closeAndEject {
+                // After unmount there may be no filesystem left for lsof. Still
+                // reject newly visible identities or image dependencies; target and
+                // attachment verification remain mandatory at this boundary.
+                guard simulatorCheck.reviewedProcessScope.isSubset(of: approved.reviewedProcessScope),
+                      simulatorCheck.images.isEmpty,
+                      allowUnmounted || !simulatorCheck.incomplete else {
+                    return forceProcessPreview(simulatorCheck, action: .closeAndEject)
+                }
             }
             guard cancellation.commit() else { throw ProbeFailure(M("ejectflow.operation.cancelled")) }
             onCommit()

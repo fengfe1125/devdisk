@@ -31,6 +31,7 @@ final class DiskStore: ObservableObject {
     @Published var ejectPlan: EjectPlan?
     @Published var waitingForSystem = false
     @Published var forceWasUsed = false
+    @Published var forceProcessRequestCount = 0
     @Published private var verifiedEjected: Screen?
     @Published var mountPoint = ""
     @Published var drives: [DiscoveredVolume] = []
@@ -369,13 +370,44 @@ final class DiskStore: ObservableObject {
         if selected { ejectPlan?.selectedTasks.insert(identity) }
         else { ejectPlan?.selectedTasks.remove(identity) }
     }
+    func selectForceProcess(_ identity: ProcessIdentity, selected: Bool) {
+        guard operation == .awaitingConfirmation, let plan = ejectPlan,
+              plan.forceProcessConfirmation == nil, !plan.forceConfirmation,
+              plan.forceEligible.contains(identity) else { return }
+        if selected { ejectPlan?.selectedForceProcesses.insert(identity) }
+        else { ejectPlan?.selectedForceProcesses.remove(identity) }
+    }
+    func selectAllForceProcesses(_ selected: Bool) {
+        guard operation == .awaitingConfirmation, let plan = ejectPlan,
+              plan.forceProcessConfirmation == nil, !plan.forceConfirmation else { return }
+        ejectPlan?.selectedForceProcesses = selected ? plan.forceEligible : []
+    }
+    func requestForceProcesses(_ action: ForceProcessAction) {
+        guard operation == .awaitingConfirmation, let plan = ejectPlan,
+              plan.forceProcessConfirmation == nil, !plan.forceConfirmation, plan.canForceProcesses,
+              action == .closeAndEject || plan.canCloseSelected else { return }
+        operationToken?.cancel()
+        let token = CancellationToken()
+        operationToken = token
+        operation = .preflight; screen = .ejecting
+        let flow = makeFlow(runner, mountPoint, token)
+        wire(flow, token: token)
+        ejectQueue.async { [weak self] in
+            let outcome = flow.prepareForceProcesses(plan, action: action)
+            Task { @MainActor in self?.receive(outcome, token: token) }
+        }
+    }
+    func cancelForceProcessConfirmation() {
+        guard operation == .awaitingConfirmation else { return }
+        ejectPlan?.forceProcessConfirmation = nil
+    }
     private func beginPreflight(previous: EjectPlan? = nil) {
         if previous == nil, let failure = ejectDiagnostic, failure.forceUsed,
            failure.target.volume.mount == mountPoint {
             let recovery = EjectPlan(target: failure.target, createdAt: now(), holders: [],
                 images: failure.relatedImages, issues: [], forceUsed: true,
                 completedApps: failure.completedApps, completedDaemons: failure.completedProcesses,
-                completedImages: failure.completedImages, failure: failure)
+                completedImages: failure.completedImages, forceRequested: failure.forceRequested, failure: failure)
             beginPreflight(previous: recovery)
             return
         }
@@ -384,7 +416,7 @@ final class DiskStore: ObservableObject {
         ejectPlan = nil; ejectFailure = nil; lastError = nil; waitingForSystem = false
         ejectVerificationPending = false
         lastEjectVerification = nil
-        if previous == nil { ejectDiagnostic = nil; forceWasUsed = false }
+        if previous == nil { ejectDiagnostic = nil; forceWasUsed = false; forceProcessRequestCount = 0 }
         ejectSteps = [.init(id: "scan", title: M("diskstore.read.only.preflight.verify.target.and.open.files"), state: .running)]
         let token = CancellationToken()
         operationToken = token
@@ -405,6 +437,12 @@ final class DiskStore: ObservableObject {
         }
     }
     nonisolated private func wire(_ flow: EjectFlow, token: CancellationToken) {
+        flow.onForceProcesses = { [weak self] identities in
+            Task { @MainActor in
+                guard let self, self.operationToken === token else { return }
+                self.forceProcessRequestCount = identities.count
+            }
+        }
         flow.onUpdate = { [weak self] steps in
             Task { @MainActor in
                 guard let self, self.operationToken === token, self.operation.locksTarget else { return }
@@ -441,6 +479,9 @@ final class DiskStore: ObservableObject {
     func confirmEject(mode: EjectMode = .prepared) {
         guard operation == .awaitingConfirmation, let plan = ejectPlan,
               let token = operationToken, !token.isCancelled else { return }
+        guard mode != .forceProcesses || (plan.forceProcessConfirmation != nil && plan.canForceProcesses
+            && (plan.forceProcessConfirmation == .closeAndEject || plan.canCloseSelected)) else { return }
+        guard plan.forceProcessConfirmation == nil || mode == .forceProcesses else { return }
         guard mode != .force || (plan.forceConfirmation && plan.canForce) else { return }
         guard !plan.forceConfirmation || mode == .force else { return }
         operation = .executing; screen = .ejecting
@@ -506,6 +547,7 @@ final class DiskStore: ObservableObject {
         case .preview(let plan):
             ejectVerificationPending = false
             forceWasUsed = plan.forceUsed
+            forceProcessRequestCount = plan.forceRequested.count
             ejectPlan = plan; operation = .awaitingConfirmation; screen = .preview
             if let failure = plan.failure { ejectDiagnostic = failure }
             waitingForSystem = false

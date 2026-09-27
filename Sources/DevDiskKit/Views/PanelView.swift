@@ -9,6 +9,13 @@ private struct ContentHeightKey: PreferenceKey {
     }
 }
 
+private struct PanelChromeHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value += nextValue()
+    }
+}
+
 struct PanelView: View {
     @ObservedObject private var language = LanguageStore.shared
     @EnvironmentObject var store: DiskStore
@@ -29,10 +36,20 @@ struct PanelView: View {
     /// Natural height of the scrolling content, measured so the popover can be sized
     /// to fit it.
     @State private var contentHeight: CGFloat = 0
+    @State private var chromeHeight: CGFloat = 220
+
+    private var bodyHeightCap: CGFloat {
+        UI.boundedBodyHeight(
+            preferred: presentation == .window ? UI.maxWindowBodyHeight : UI.maxScrollHeight,
+            available: NSScreen.main?.visibleFrame.height ?? 800,
+            chrome: chromeHeight)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            header.background(GeometryReader { geometry in
+                Color.clear.preference(key: PanelChromeHeightKey.self, value: geometry.size.height)
+            })
             Divider1()
 
             // A menu bar popover is a card, not a page. Without a bound the connected
@@ -44,19 +61,24 @@ struct PanelView: View {
             // the tallest screen it had shown: the ejected card needed 308pt but the
             // window stayed 633pt, and SwiftUI centred the card in it — a transparent
             // band above and below, and the card sitting far below the menu bar.
-            body(cap: presentation == .window ? UI.maxWindowBodyHeight
-                                              : UI.maxScrollHeight)
+            body(cap: bodyHeightCap)
 
             Divider1()
-            actionFooter
+            actionFooter.background(GeometryReader { geometry in
+                Color.clear.preference(key: PanelChromeHeightKey.self, value: geometry.size.height)
+            })
             if showVersion || updates.available != nil {
                 Divider1()
                 VersionFooter(version: updates.currentVersion,
                               update: updates.available) { url in
                     NSWorkspace.shared.open(url)
                 }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: PanelChromeHeightKey.self, value: geometry.size.height)
+                })
             }
         }
+        .onPreferenceChange(PanelChromeHeightKey.self) { chromeHeight = $0 }
         .frame(width: UI.width)
         // The content height is stateful because long screens switch to a bounded
         // ScrollView. Reset it before measuring a new screen; otherwise a short
@@ -357,6 +379,9 @@ struct EjectedView: View {
                         Text(store.lastEjectVerification
                              ?? M("panelview.physical.disk.offline.related.volumes.unmounted"))
                         if store.forceWasUsed { Text(L("ejectforce.data.warning")).foregroundStyle(.orange) }
+                        if store.forceProcessRequestCount > 0 {
+                            Text(L("forceprocess.requests", store.forceProcessRequestCount)).foregroundStyle(.orange)
+                        }
                         if let s = store.lastEjectSummary { Text(s) }
                     }
                 )

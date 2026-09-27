@@ -12,6 +12,90 @@ final class StoreReliabilityTests: XCTestCase {
         subscription?.cancel()
     }
 
+    func testFullForceSelectionAndSeparateConfirmationAreReadOnlyUntilConfirmed() async {
+        let h = FlowHarness(); h.add(pid: 101, app: "editor"); h.add(pid: 102)
+        h.add(pid: 103, executable: "/bin/zsh", args: "zsh")
+        h.add(pid: 104, executable: "/usr/libexec/service", args: "service")
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        store.applyDiscovery([drive("ReviewDisk", uuid: "review-uuid")])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+        store.eject(); await wait(store, for: .awaitingConfirmation)
+        XCTAssertTrue(store.ejectPlan?.selectedForceProcesses.isEmpty == true)
+        store.selectAllForceProcesses(true)
+        XCTAssertEqual(Set(store.ejectPlan!.selectedForceProcesses.map(\.pid)), [101, 102, 103])
+        XCTAssertTrue(store.ejectPlan?.selectedTasks.isEmpty == true, "Force selection must not authorize TERM")
+        store.selectAllForceProcesses(false)
+        XCTAssertTrue(store.ejectPlan?.selectedForceProcesses.isEmpty == true)
+        store.selectForceProcess(h.processes.live[104]!, selected: true)
+        XCTAssertTrue(store.ejectPlan?.selectedForceProcesses.isEmpty == true)
+        store.selectAllForceProcesses(true)
+        store.confirmEject(mode: .forceProcesses)
+        XCTAssertEqual(store.operation, .awaitingConfirmation)
+        XCTAssertTrue(h.processes.forced.isEmpty)
+        store.requestForceProcesses(.closeOnly)
+        await wait(store, for: .awaitingConfirmation)
+        XCTAssertEqual(store.ejectPlan?.forceProcessConfirmation, .closeOnly)
+        store.selectAllForceProcesses(false)
+        XCTAssertEqual(store.ejectPlan?.selectedForceProcesses.count, 3, "confirmation freezes selection")
+        XCTAssertTrue(h.processes.forced.isEmpty)
+        store.cancelForceProcessConfirmation()
+        XCTAssertNil(store.ejectPlan?.forceProcessConfirmation)
+        store.requestForceProcesses(.closeOnly)
+        await wait(store, for: .awaitingConfirmation)
+        store.confirmEject(mode: .forceProcesses)
+        store.confirmEject(mode: .forceProcesses)
+        await wait(store, for: .awaitingConfirmation)
+        XCTAssertEqual(h.processes.forced, [101, 102, 103])
+        XCTAssertEqual(store.forceProcessRequestCount, 3)
+        XCTAssertFalse(store.forceWasUsed)
+        XCTAssertEqual(store.ejectPlan?.completedApps, 1)
+        XCTAssertEqual(store.ejectPlan?.completedDaemons, 2)
+        XCTAssertFalse(h.calls.contains { $0.hasPrefix("diskutil eject") || $0.hasPrefix("diskutil unmountDisk") })
+    }
+
+    func testSystemOnlyOccupancyOpensPreviewAndZeroSelectionCanConfirmDirectForce() async {
+        let h = FlowHarness(); h.add(executable: "/usr/libexec/service", args: "service")
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        store.applyDiscovery([drive("ReviewDisk", uuid: "review-uuid")])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+        store.eject(); await wait(store, for: .awaitingConfirmation)
+        XCTAssertFalse(h.calls.contains("diskutil eject disk90"))
+        XCTAssertTrue(store.ejectPlan?.selectedForceProcesses.isEmpty == true)
+        store.requestForceProcesses(.closeOnly)
+        XCTAssertEqual(store.operation, .awaitingConfirmation)
+        XCTAssertNil(store.ejectPlan?.forceProcessConfirmation)
+        store.requestForceProcesses(.closeAndEject); await wait(store, for: .awaitingConfirmation)
+        XCTAssertEqual(store.ejectPlan?.forceProcessConfirmation, .closeAndEject)
+        XCTAssertFalse(h.calls.contains("diskutil unmountDisk force disk90"))
+        store.confirmEject(mode: .forceProcesses); await wait(store, for: .finished)
+        guard case .ejected = store.screen else { return XCTFail("disk-only force") }
+        XCTAssertTrue(store.forceWasUsed); XCTAssertEqual(store.forceProcessRequestCount, 0)
+        XCTAssertTrue(h.processes.forced.isEmpty)
+    }
+
+    func testDirectJointConfirmationAfterCloseOnlyDoesNotRepeatProcessActions() async {
+        let h = FlowHarness(); h.add(app: "editor")
+        let store = DiskStore(runner: h, defaults: defaults(), start: false)
+        store.applyDiscovery([drive("ReviewDisk", uuid: "review-uuid")])
+        store.makeFlow = { _, _, token in h.cancellation = token; return h.flow }
+        store.eject(); await wait(store, for: .awaitingConfirmation)
+        store.selectAllForceProcesses(true)
+        store.requestForceProcesses(.closeOnly); await wait(store, for: .awaitingConfirmation)
+        store.confirmEject(mode: .forceProcesses); await wait(store, for: .awaitingConfirmation)
+        XCTAssertEqual(store.forceProcessRequestCount, 1)
+        store.requestForceProcesses(.closeAndEject); await wait(store, for: .awaitingConfirmation)
+        XCTAssertTrue(store.ejectPlan?.selectedForceProcesses.isEmpty == true)
+        XCTAssertFalse(h.calls.contains("diskutil unmountDisk force disk90"))
+        store.confirmEject(mode: .forceProcesses)
+        store.confirmEject(mode: .forceProcesses)
+        await wait(store, for: .finished)
+        guard case .ejected = store.screen else { return XCTFail("ejected") }
+        XCTAssertTrue(store.forceWasUsed)
+        XCTAssertEqual(store.forceProcessRequestCount, 1)
+        XCTAssertEqual(h.processes.forced, [123])
+        XCTAssertEqual(h.calls.filter { $0 == "diskutil unmountDisk force disk90" }.count, 1)
+    }
+
     func testTaskSelectionAndConfirmationUseSharedStoreState() async {
         let h = FlowHarness(); h.add(executable: "/bin/zsh", args: "zsh")
         let store = DiskStore(runner: h, defaults: defaults(), start: false)

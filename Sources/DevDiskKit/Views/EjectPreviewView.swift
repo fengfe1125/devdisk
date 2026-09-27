@@ -18,6 +18,14 @@ struct EjectPreviewView: View {
                     Text(L("ejectforce.risk")).font(.callout).foregroundStyle(.orange).padding(UI.hPad)
                     Text(L("ejectforce.no.process.kill")).font(.caption).foregroundStyle(.secondary).padding(.horizontal, UI.hPad)
                 }
+                if let action = plan.forceProcessConfirmation {
+                    Text(L(action == .closeOnly ? "forceprocess.risk.close" : plan.selectedForceProcesses.isEmpty ? "forceprocess.risk.disk.only" : "forceprocess.risk.joint"))
+                        .font(.callout).foregroundStyle(.orange).padding(UI.hPad)
+                }
+                if !plan.forceRequested.isEmpty {
+                    Text(L("forceprocess.requests", plan.forceRequested.count))
+                        .font(.caption).foregroundStyle(.orange).padding(UI.hPad)
+                }
                 if plan.completedApps + plan.completedDaemons + plan.completedImages > 0 {
                     Text(L("ejectpreviewview.so.far.apps.quit.services.stopped.images.ejected", plan.completedApps, plan.completedDaemons, plan.completedImages))
                         .font(.caption).foregroundStyle(.secondary).padding(UI.hPad)
@@ -28,12 +36,12 @@ struct EjectPreviewView: View {
                 if let failure = plan.failure {
                     EjectFailureDetails(failure: failure).padding(.horizontal, UI.hPad)
                 }
-                if plan.target.multipleVolumes || plan.forceConfirmation {
+                if plan.target.multipleVolumes || plan.forceConfirmation || plan.forceProcessConfirmation == .closeAndEject {
                     PanelSection(title: L("ejectpreviewview.ejecting.the.disk.affects.these.volumes")) {
                         ForEach(plan.target.affected, id: \.device) { volume in
                             Text("\(volume.name) · \(volume.mount)").font(.caption)
                         }
-                        if !plan.forceConfirmation {
+                        if !plan.forceConfirmation && plan.forceProcessConfirmation == nil {
                             Text(L("ejectpreviewview.this.version.does.not.automatically.handle.processes.on"))
                                 .font(.caption).foregroundStyle(.orange)
                         }
@@ -60,23 +68,45 @@ struct EjectPreviewView: View {
                     }
                 }
                 if !plan.forceConfirmation {
-                    group(L("ejectpreviewview.apps.to.request.to.quit"), plan.apps, note: L("ejectpreviewview.quitting.affects.the.entire.app.each.app.handles"))
-                    group(L("ejectpreviewview.approved.background.services.to.stop"), plan.daemons, note: L("ejectpreviewview.services.may.still.be.working.after.confirmation.sends"))
-                    if !plan.manual.isEmpty {
-                        PanelSection(title: L("ejectpreviewview.other.tasks")) {
-                            Text(L("ejectpreviewview.terminate.warning")).font(.caption).foregroundStyle(.orange)
-                            ForEach(plan.manual) { holder in
-                                HolderRow(holder: holder)
-                                if holder.canTerminateTask, let identity = holder.identity {
-                                    Toggle(L("ejectpreviewview.allow.terminate", holder.displayName), isOn: Binding(
-                                        get: { store.ejectPlan?.selectedTasks.contains(identity) == true },
-                                        set: { store.selectTask(identity, selected: $0) }
-                                    )).toggleStyle(.checkbox).font(.caption)
+                    PanelSection(title: L("forceprocess.occupants")) {
+                        Text(L("forceprocess.selection.count", plan.selectedForceProcesses.count, plan.forceEligible.count))
+                            .font(.caption)
+                        if plan.forceProcessConfirmation == nil {
+                            HStack {
+                                Button(L("forceprocess.select.all")) { store.selectAllForceProcesses(true) }
+                                    .disabled(plan.forceEligible.isEmpty)
+                                Button(L("forceprocess.deselect.all")) { store.selectAllForceProcesses(false) }
+                                    .disabled(plan.selectedForceProcesses.isEmpty)
+                            }.buttonStyle(.bordered)
+                            Text(L("forceprocess.normal.note")).font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(plan.holders) { holder in
+                            HolderRow(holder: holder)
+                            if let identity = holder.identity, plan.forceEligible.contains(identity) {
+                                Text("PID \(identity.pid) · \(identity.executable)")
+                                    .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                                if plan.forceProcessConfirmation != nil {
+                                    Text(L(plan.selectedForceProcesses.contains(identity)
+                                           ? "forceprocess.selected" : "forceprocess.unselected"))
+                                        .font(.caption).foregroundStyle(.orange)
                                 } else {
-                                    Text(L("ejectpreviewview.save.and.stop.these.tasks.then.scan.again"))
-                                        .font(.caption).foregroundStyle(.secondary)
+                                    Toggle(L("forceprocess.select", holder.displayName), isOn: Binding(
+                                        get: { store.ejectPlan?.selectedForceProcesses.contains(identity) == true },
+                                        set: { store.selectForceProcess(identity, selected: $0) }
+                                    )).toggleStyle(.checkbox).font(.caption)
+                                    if holder.canTerminateTask {
+                                        Toggle(L("ejectpreviewview.allow.terminate", holder.displayName), isOn: Binding(
+                                            get: { store.ejectPlan?.selectedTasks.contains(identity) == true },
+                                            set: { store.selectTask(identity, selected: $0) }
+                                        )).toggleStyle(.checkbox).font(.caption)
+                                    }
                                 }
+                            } else {
+                                Text(L("forceprocess.ineligible")).font(.caption).foregroundStyle(.secondary)
                             }
+                        }
+                        if plan.target.multipleVolumes || !plan.simulators.isEmpty {
+                            Text(L("forceprocess.scope.blocked")).font(.caption).foregroundStyle(.orange)
                         }
                     }
                 }
@@ -114,7 +144,12 @@ struct EjectPreviewFooter: View {
     var body: some View {
         VStack(spacing: 8) {
             if let plan = store.ejectPlan {
-                if plan.forceConfirmation {
+                if let action = plan.forceProcessConfirmation {
+                    PrimaryButton(title: L(action == .closeOnly ? "forceprocess.confirm.close" : plan.selectedForceProcesses.isEmpty ? "forceprocess.confirm.disk.only" : "forceprocess.confirm.joint"),
+                                  symbol: "exclamationmark.triangle") { store.confirmEject(mode: .forceProcesses) }
+                        .disabled(!plan.canForceProcesses || (action == .closeOnly && !plan.canCloseSelected))
+                    Button(L("forceprocess.back")) { store.cancelForceProcessConfirmation() }.buttonStyle(.bordered)
+                } else if plan.forceConfirmation {
                     PrimaryButton(title: L("ejectforce.confirm"), symbol: "exclamationmark.triangle") { store.confirmEject(mode: .force) }
                         .disabled(!plan.canForce)
                 } else {
@@ -128,7 +163,11 @@ struct EjectPreviewFooter: View {
                         Text(L("ejectpreviewview.does.not.quit.apps.stop.services.eject.images"))
                             .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
-                    if store.canOfferForce {
+                    Button(L("forceprocess.close.selected")) { store.requestForceProcesses(.closeOnly) }
+                        .buttonStyle(.bordered).disabled(!plan.canCloseSelected)
+                    Button(L(plan.selectedForceProcesses.isEmpty ? "ejectforce.action" : "forceprocess.close.and.eject")) { store.requestForceProcesses(.closeAndEject) }
+                        .buttonStyle(.bordered).disabled(!plan.canForceProcesses)
+                    if store.canOfferForce && !plan.canForceProcesses {
                         Button(L("ejectforce.action")) { store.requestForceEject() }.buttonStyle(.bordered)
                     }
                 }

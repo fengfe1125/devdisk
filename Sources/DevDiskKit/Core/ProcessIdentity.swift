@@ -18,13 +18,15 @@ struct ProcessIdentity: Hashable {
                 .contains { executable.hasPrefix($0) }
     }
 
-    var canTerminateTask: Bool { uid == getuid() && bundleID == nil && !isProtectedService }
+    var canForceClose: Bool { uid == getuid() && !isProtectedService }
+    var canTerminateTask: Bool { canForceClose && bundleID == nil }
 }
 
 protocol ProcessInspecting {
     /// nil means known to have exited; failure means the identity cannot be established.
     func identity(_ pid: Int32) throws -> ProcessIdentity?
     func requestQuit(_ identity: ProcessIdentity) throws
+    func forceClose(_ identity: ProcessIdentity) throws
 }
 
 struct SystemProcessInspector: ProcessInspecting {
@@ -48,6 +50,27 @@ struct SystemProcessInspector: ProcessInspecting {
                                executable: String(cString: path),
                                bundleID: app?.bundleIdentifier,
                                appName: app?.localizedName)
+    }
+
+    func forceClose(_ expected: ProcessIdentity) throws {
+        guard expected.canForceClose else { throw ProbeFailure(M("forceprocess.ineligible")) }
+        if expected.bundleID != nil {
+            let request = { () throws -> Bool in
+                guard try identity(expected.pid) == expected else {
+                    throw ProbeFailure(M("ejectflow.process.identity.changed.scan.again"))
+                }
+                return NSRunningApplication(processIdentifier: expected.pid)?.forceTerminate() == true
+            }
+            let accepted = try Thread.isMainThread ? request() : DispatchQueue.main.sync(execute: request)
+            guard accepted else { throw ProbeFailure(M("forceprocess.refused")) }
+        } else {
+            guard try identity(expected.pid) == expected else {
+                throw ProbeFailure(M("ejectflow.process.identity.changed.scan.again"))
+            }
+            guard Darwin.kill(expected.pid, SIGKILL) == 0 else {
+                throw ProbeFailure(M("forceprocess.refused"))
+            }
+        }
     }
 
     func requestQuit(_ expected: ProcessIdentity) throws {
